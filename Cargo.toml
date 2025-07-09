@@ -1,0 +1,8 @@
+[package]
+name = "ecs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ecs_derive = { path = "ecs_derive" }
+variadics_please = "1.1.0"
