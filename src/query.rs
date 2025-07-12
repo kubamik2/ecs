@@ -1,23 +1,27 @@
-use crate::{bitmap::Bitmap, component_manager::ComponentManager, Component, Entity};
-use std::{cell::{Ref, RefMut}, ptr::NonNull};
+use crate::{access::Access, bitmap::Bitmap, component_manager::ComponentManager, Component, Entity};
+use std::ptr::NonNull;
 
 pub struct Query<D: QueryData> {
     _a: std::marker::PhantomData<D>,
-    component_manager: NonNull<ComponentManager>,
+    component_manager: SyncPointer<ComponentManager>,
 }
+
+struct SyncPointer<T>(NonNull<T>);
+unsafe impl<T> Sync for SyncPointer<T> {}
+unsafe impl<T> Send for SyncPointer<T> {}
 
 impl<D: QueryData> Query<D> {
     pub fn new(component_manager: &ComponentManager) -> Self {
         Self {
             _a: std::marker::PhantomData,
-            component_manager: NonNull::from(component_manager),
+            component_manager: SyncPointer(NonNull::from(component_manager)),
         }
     }
 
     pub fn iter(&self) -> QueryIter<D> {
         QueryIter {
             query: self,
-            iter: unsafe { self.component_manager.as_ref().entity_component_signatures.iter() },
+            iter: unsafe { self.component_manager.0.as_ref().entity_component_signatures.iter() },
         }
     }
 }
@@ -34,7 +38,7 @@ impl<'a, D: QueryData> Iterator for QueryIter<'a, D> {
             if (*bitmap & D::signature()) == D::signature() {
                 return Some((
                     *entity,
-                    unsafe { D::fetch(self.query.component_manager.as_ref(), *entity) }
+                    unsafe { D::fetch(self.query.component_manager.0.as_ref(), *entity) }
                 ))
             }
         }
@@ -50,27 +54,44 @@ pub trait QueryData {
     /// .
     unsafe fn fetch(component_manager: &ComponentManager, entity: Entity) -> Self::Item<'_>;
     fn signature() -> Bitmap;
+    fn component_access() -> Access;
 }
 
 impl<T: Component + 'static> QueryData for &T {
-    type Item<'a> = Ref<'a, T>;
+    type Item<'a> = &'a T;
     unsafe fn fetch(component_manager: &ComponentManager, entity: Entity) -> Self::Item<'_> {
-        unsafe { component_manager.get_entity_component(entity).unwrap_unchecked() }
+        unsafe { component_manager.get_entity_component::<T>(entity).unwrap_unchecked().as_ref().unwrap_unchecked() }
     }
 
     fn signature() -> Bitmap {
-        Bitmap::default().with_set(T::signature_index())
+        Bitmap::new().with_set(T::signature_index())
+    }
+
+    fn component_access() -> Access {
+        Access {
+            immutable: Bitmap::new().with_set(T::signature_index()),
+            mutable: Bitmap::new(),
+            mutable_count: 0,
+        }
     }
 }
 
 impl<T: Component + 'static> QueryData for &mut T {
-    type Item<'a> = RefMut<'a, T>;
+    type Item<'a> = &'a mut T;
     unsafe fn fetch(component_manager: &ComponentManager, entity: Entity) -> Self::Item<'_> {
-        unsafe { component_manager.get_mut_entity_component(entity).unwrap_unchecked() }
+        unsafe { component_manager.get_mut_entity_component::<T>(entity).unwrap_unchecked().as_mut().unwrap_unchecked() }
     }
 
     fn signature() -> Bitmap {
         Bitmap::default().with_set(T::signature_index())
+    }
+
+    fn component_access() -> Access {
+        Access {
+            immutable: Bitmap::new(),
+            mutable: Bitmap::new().with_set(T::signature_index()),
+            mutable_count: 1,
+        }
     }
 }
 
@@ -84,6 +105,14 @@ macro_rules! query_tuple_impl {
 
             fn signature() -> Bitmap {
                 $($name::signature())|+
+            }
+            
+            fn component_access() -> Access {
+                Access {
+                    immutable: $($name::component_access().immutable)|+,
+                    mutable: $($name::component_access().mutable)|+,
+                    mutable_count: $($name::component_access().mutable_count+)+0,
+                }
             }
         }
     }
