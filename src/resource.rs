@@ -1,38 +1,38 @@
-use std::{any::Any, cell::SyncUnsafeCell, ops::{Deref, DerefMut}, ptr::NonNull};
+use std::{any::{Any, TypeId}, cell::SyncUnsafeCell, collections::HashMap, ops::{Deref, DerefMut}, ptr::NonNull};
 
-use crate::{access::Access, bitmap::Bitmap, param::SystemParam, Resource, MAX_RESOURCES};
+use super::{access::Access, param::SystemParam, Resource, ECS};
 
 #[derive(Default)]
 pub struct ResourceManager {
-    resources: [Option<SyncUnsafeCell<Box<dyn Any>>>; MAX_RESOURCES],
+    resources: HashMap<TypeId, SyncUnsafeCell<Box<dyn Any>>>
 }
+
 unsafe impl Sync for ResourceManager {}
 unsafe impl Send for ResourceManager {}
 
 impl ResourceManager {
-    pub fn get<R: Resource + Send + Sync + 'static>(&self) -> Option<Res<R>> {
-        let boxed_any = self.resources[R::signature_index()].as_ref()?;
+    pub fn get<R: Resource>(&self) -> Option<Res<R>> {
+        let boxed_any = self.resources.get(&TypeId::of::<R>())?;
         Some(Res { val: SyncPointer(NonNull::from(unsafe { boxed_any.get().as_mut().unwrap_unchecked().downcast_mut::<R>().unwrap_unchecked() })) })
     }
 
     pub fn get_mut<R: Resource + Send + Sync + 'static>(&self) -> Option<ResMut<R>> {
-        let boxed_any = self.resources[R::signature_index()].as_ref()?;
+        let boxed_any = self.resources.get(&TypeId::of::<R>())?;
         Some(ResMut { val: SyncPointer(NonNull::from(unsafe { boxed_any.get().as_mut().unwrap_unchecked().downcast_mut::<R>().unwrap_unchecked() })) })
     }
 
-    pub fn set<R: Resource + Send + Sync + 'static>(&mut self, resource: R) {
-        self.resources[R::signature_index()] = Some(SyncUnsafeCell::new(Box::new(resource)));
+    pub fn insert<R: Resource + Send + Sync + 'static>(&mut self, resource: R) {
+        self.resources.insert(TypeId::of::<R>(), SyncUnsafeCell::new(Box::new(resource)));
     }
 
     pub fn remove<R: Resource + Send + Sync + 'static>(&mut self) -> Option<Box<R>> {
-        let val = self.resources[R::signature_index()].take()?;
-        let boxed_any = val.into_inner();
-        boxed_any.downcast::<R>().ok()
+        self.resources
+            .remove(&TypeId::of::<R>())
+            .and_then(|f| f.into_inner().downcast::<R>().ok())
     }
 }
 
 pub struct SyncPointer<T>(NonNull<T>);
-
 unsafe impl<T> Sync for SyncPointer<T> {}
 unsafe impl<T> Send for SyncPointer<T> {}
 
@@ -65,27 +65,21 @@ impl<R: Resource + Send + Sync> DerefMut for ResMut<R> {
 }
 
 impl<R: Resource + Send + Sync + 'static> SystemParam for Res<R> {
-    fn create(_: &crate::component_manager::ComponentManager, resource_manager: &ResourceManager) -> Option<Self> {
-        resource_manager.get::<R>()
+    fn create(ecs: &ECS) -> Option<Self> {
+        ecs.resource_manager.get::<R>()
     }
-    fn resource_access() -> Access {
-        Access {
-            immutable: Bitmap::new().with_set(R::signature_index()),
-            ..Default::default()
-        }
+    fn join_resource_access(resource_access: &mut Access) {
+        resource_access.immutable.insert(TypeId::of::<R>());
     }
 }
 
 impl<R: Resource + Send + Sync + 'static> SystemParam for ResMut<R> {
-    fn create(_: &crate::component_manager::ComponentManager, resource_manager: &ResourceManager) -> Option<Self> {
-        resource_manager.get_mut::<R>()
+    fn create(ecs: &ECS) -> Option<Self> {
+        ecs.resource_manager.get_mut::<R>()
     }
 
-    fn resource_access() -> Access {
-        Access {
-            mutable: Bitmap::new().with_set(R::signature_index()),
-            mutable_count: 1,
-            ..Default::default()
-        }
+    fn join_resource_access(resource_access: &mut Access) {
+        resource_access.mutable.insert(TypeId::of::<R>());
+        resource_access.mutable_count += 1;
     }
 }

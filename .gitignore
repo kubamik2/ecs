@@ -1,4 +1,4 @@
 /target
 Cargo.lock
-ecs_derive/target
-ecs_derive/Cargo.lock
+derive/target
+derive/Cargo.lock

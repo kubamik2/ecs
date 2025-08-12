@@ -1,45 +1,12 @@
-use crate::{access::Access, component_manager::ComponentManager, ecs::ECSError, param::SystemFunc, resource::ResourceManager};
+use super::{access::Access, param::SystemFunc, ECSError, ECS};
 
 pub trait System {
-    fn execute(&self, component_manager: &ComponentManager, resource_manager: &ResourceManager);
-    fn component_access(&self) -> Access;
-    fn resource_access(&self) -> Access;
-    fn is_compatible_component_wise(&self, other: &dyn System) -> bool {
-        let component_access = self.component_access();
-        let other_component_access = other.component_access();
-        
-        let check_a = other_component_access.mutable & component_access.immutable;
-        let check_b = component_access.mutable & other_component_access.immutable;
-        let check_c = component_access.mutable & other_component_access.mutable;
-
-        check_a.is_zero() && check_b.is_zero() && check_c.is_zero()
-    }
-    fn is_compatible_resource_wise(&self, other: &dyn System) -> bool {
-        let resource_access = self.resource_access();
-        let other_resource_access = other.resource_access();
-        
-        let check_a = other_resource_access.mutable & resource_access.immutable;
-        let check_b = resource_access.mutable & other_resource_access.immutable;
-        let check_c = resource_access.mutable & other_resource_access.mutable;
-
-        check_a.is_zero() && check_b.is_zero() && check_c.is_zero()
-    }
-    fn is_compatible(&self, other: &dyn System) -> bool {
-        self.is_compatible_component_wise(other) && self.is_compatible_resource_wise(other)
-    }
+    fn execute(&self, ecs: &ECS);
+    fn component_access(&self) -> &Access;
+    fn resource_access(&self) -> &Access;
     fn is_comp(&self, other_component_access: &Access, other_resource_access: &Access) -> bool {
-        let component_access = self.component_access();
-        let resource_access = self.resource_access();
-
-        let check_a = other_component_access.mutable & component_access.immutable;
-        let check_b = component_access.mutable & other_component_access.immutable;
-        let check_c = component_access.mutable & other_component_access.mutable;
-
-        let check_d = other_resource_access.mutable & resource_access.immutable;
-        let check_e = resource_access.mutable & other_resource_access.immutable;
-        let check_f = resource_access.mutable & other_resource_access.mutable;
-
-        check_a.is_zero() && check_b.is_zero() && check_c.is_zero() && check_d.is_zero() && check_e.is_zero() && check_f.is_zero()
+        self.component_access().is_compatible(other_component_access) &&
+        self.resource_access().is_compatible(other_resource_access)
     }
 }
 
@@ -53,10 +20,10 @@ impl Schedule {
     pub fn add_system<M, T: IntoSystem<M> + 'static>(&mut self, system: T) -> Result<(), ECSError> {
         let system = system.into_system();
         let component_access = system.component_access();
-        if component_access.mutable_count > component_access.mutable.ones() {
+        if component_access.mutable_count as usize > component_access.mutable.len() {
             return Err(ECSError::MultipleMutRefs);
         }
-        if !(component_access.immutable & component_access.mutable).is_zero() {
+        if component_access.immutable.intersection(&component_access.mutable).next().is_some() {
             return Err(ECSError::IncompatibleRefs);
         }
         self.systems.push(system);
@@ -64,13 +31,13 @@ impl Schedule {
         Ok(())
     }
 
-    pub(crate) fn execute(&self, component_manager: &ComponentManager, resource_manager: &ResourceManager, thread_pool: &rayon::ThreadPool) {
-        thread_pool.in_place_scope(|scope| {
+    pub fn execute(&self, ecs: &ECS) {
+        ecs.thread_pool.in_place_scope(|scope| {
             for pack in &self.parallel_exeuction_queue {
                 for i in pack {
                     let system = &self.systems[*i];
                     scope.spawn(|_| {
-                        system.execute(component_manager, resource_manager);
+                        system.execute(ecs);
                     });
                 }
             }
@@ -89,8 +56,8 @@ impl Schedule {
             added_systems[i] = true;
             let mut systems = vec![i];
             let system = self.systems[i].as_ref();
-            let mut joined_component_access = system.component_access();
-            let mut joined_resource_access = system.resource_access();
+            let mut joined_component_access = system.component_access().clone();
+            let mut joined_resource_access = system.resource_access().clone();
 
             for j in i+1..self.systems.len() {
                 if added_systems[j] { continue; }
@@ -100,10 +67,10 @@ impl Schedule {
                     added_systems[j] = true;
                     let component_access = other_system.component_access();
                     let resource_access = other_system.resource_access();
-                    joined_component_access.immutable |= component_access.immutable;
-                    joined_component_access.mutable |= component_access.mutable;
-                    joined_resource_access.immutable |= resource_access.immutable;
-                    joined_resource_access.mutable |= resource_access.mutable;
+
+                    joined_component_access.join(component_access);
+                    joined_resource_access.join(resource_access);
+
                     systems.push(j);
                 }
             }
@@ -125,17 +92,17 @@ pub struct FunctionSystem<M, F: SystemFunc<M>> {
     _a: std::marker::PhantomData<M>,
 }
 
-impl<M, F:SystemFunc<M>> System for FunctionSystem<M, F> {
-    fn execute(&self, component_manager: &ComponentManager, resource_manager: &ResourceManager) {
-        self.func.run(component_manager, resource_manager);
+impl<M, F: SystemFunc<M>> System for FunctionSystem<M, F> {
+    fn execute(&self, ecs: &ECS) {
+        self.func.run(ecs);
     }
 
-    fn component_access(&self) -> Access {
-        self.component_access
+    fn component_access(&self) -> &Access {
+        &self.component_access
     }
 
-    fn resource_access(&self) -> Access {
-        self.resource_access
+    fn resource_access(&self) -> &Access {
+        &self.resource_access
     }
 }
 
@@ -145,9 +112,13 @@ pub trait IntoSystem<M> {
 
 impl<M: Send + Sync + 'static, T: Send + Sync + 'static> IntoSystem<M> for T where T: SystemFunc<M> + 'static {
     fn into_system(self) -> Box<dyn System + Send + Sync> {
+        let mut component_access = Access::default();
+        let mut resource_access = Access::default();
+        Self::join_component_access(&mut component_access);
+        Self::join_resource_access(&mut resource_access);
         Box::new(FunctionSystem {
-            component_access: self.component_access(),
-            resource_access: self.resource_access(),
+            component_access,
+            resource_access,
             func: self,
             _a: Default::default(),
         })

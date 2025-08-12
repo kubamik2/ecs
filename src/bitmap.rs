@@ -1,10 +1,13 @@
-use std::{fmt::{Debug, Display}, ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign}};
+use std::{fmt::{Debug, Display}, ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Deref}};
 
-use crate::MAX_COMPONENTS;
+use super::MAX_COMPONENTS;
+
+type StorageType = u128;
 
 #[derive(Default, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct Bitmap(u32);
+pub struct Bitmap(StorageType);
 
+#[allow(unused)]
 impl Bitmap {
     #[inline]
     pub const fn new() -> Self {
@@ -20,21 +23,21 @@ impl Bitmap {
     #[inline]
     pub const fn get(&self, index: usize) -> bool {
         assert!(index < MAX_COMPONENTS);
-        let mask: u32 = 1 << index;
+        let mask: StorageType = 1 << index;
         (self.0 & mask) > 0
     }
 
     #[inline]
     pub const fn set(&mut self, index: usize) {
         assert!(index < MAX_COMPONENTS);
-        let mask: u32 = 1 << index;
+        let mask: StorageType = 1 << index;
         self.0 |= mask;
     }
 
     #[inline]
     pub const fn unset(&mut self, index: usize) {
         assert!(index < MAX_COMPONENTS);
-        let mask: u32 = 1 << index;
+        let mask: StorageType = 1 << index;
         self.0 &= !mask;
     }
 
@@ -87,5 +90,12 @@ impl BitOr for Bitmap {
 impl BitOrAssign for Bitmap {
     fn bitor_assign(&mut self, rhs: Self) {
         self.0 |= rhs.0
+    }
+}
+
+impl Deref for Bitmap {
+    type Target = StorageType;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
