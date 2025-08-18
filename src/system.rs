@@ -1,3 +1,5 @@
+use crate::{entity_manager::EntityBundle, param::SystemParam, Entity};
+
 use super::{access::Access, param::SystemFunc, ECS};
 
 pub trait System {
@@ -72,5 +74,28 @@ impl<M: Send + Sync + 'static, T: Send + Sync + 'static> IntoSystem<M> for T whe
             func: self,
             _a: Default::default(),
         })
+    }
+}
+
+pub(crate) enum SystemCommand {
+    Spawn(Box<dyn FnOnce(&mut ECS) + Send>),
+    Remove(Entity),
+}
+
+pub struct Commands(std::sync::mpsc::Sender<SystemCommand>);
+
+impl Commands {
+    pub fn spawn<B: EntityBundle + 'static + Send>(&self, bundle: B) {
+        self.0.send(SystemCommand::Spawn(Box::new(move |ecs| { bundle.spawn(ecs); }))).expect("Commands::spawn Sender error")
+    }
+
+    pub fn remove(&self, entity: Entity) {
+        self.0.send(SystemCommand::Remove(entity)).expect("Commands::spawn Sender error")
+    }
+}
+
+impl SystemParam for Commands {
+    fn create(ecs: &ECS) -> Option<Self> {
+        Some(Self(ecs.system_command_sender.clone()))
     }
 }

@@ -1,2 +1,4 @@
 arena allocator for components
-commands
+events
+signals, reactive systems
+hierarchy

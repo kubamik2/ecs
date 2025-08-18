@@ -15,6 +15,7 @@ pub use query::Query;
 pub use resource::{Res, ResMut};
 pub use derive::{Component, Resource};
 pub use schedule::Schedule;
+pub use system::Commands;
 
 pub const MAX_ENTITIES: usize = 2_usize.pow(16)-1;
 pub const MAX_COMPONENTS: usize = 128;
@@ -61,17 +62,13 @@ pub struct ECS {
     pub(crate) resource_manager: resource::ResourceManager,
     pub(crate) thread_pool: rayon::ThreadPool,
     schedules: HashMap<TypeId, Vec<Option<Schedule>>>,
+    system_command_receiver: std::sync::mpsc::Receiver<system::SystemCommand>,
+    pub(crate) system_command_sender: std::sync::mpsc::Sender<system::SystemCommand>,
 }
 
 impl Default for ECS {
     fn default() -> Self {
-        ECS {
-            component_manager: Default::default(),
-            entity_manager: Default::default(),
-            resource_manager: Default::default(),
-            thread_pool: rayon::ThreadPoolBuilder::new().num_threads(16).build().unwrap(),
-            schedules: Default::default(),
-        }
+        Self::new(Self::DEFAULT_THREAD_COUND).unwrap()
     }
 }
 
@@ -79,17 +76,21 @@ unsafe impl Sync for ECS {}
 unsafe impl Send for ECS {}
 
 impl ECS {
+    const DEFAULT_THREAD_COUND: usize = 16;
     pub fn new(num_threads: usize) -> Result<Self, rayon::ThreadPoolBuildError> {
+        let (system_command_sender, system_command_receiver) = std::sync::mpsc::channel();
         Ok(Self {
             component_manager: Default::default(),
             entity_manager: Default::default(),
             resource_manager: Default::default(),
             thread_pool: rayon::ThreadPoolBuilder::new().num_threads(num_threads).build()?,
             schedules: Default::default(),
+            system_command_receiver,
+            system_command_sender,
         })
     }
 
-    pub fn spawn<T: entity_manager::EntityBundle>(&mut self, components: T) -> Entity {
+    pub fn spawn<B: entity_manager::EntityBundle>(&mut self, components: B) -> Entity {
         components.spawn(self)
     }
 
@@ -117,9 +118,12 @@ impl ECS {
         self.component_manager.get_mut_component(entity)
     }
 
-    pub fn execute_schedule<L: schedule::ScheduleLabel>(&self, label: L) {
+    pub fn execute_schedule<L: schedule::ScheduleLabel>(&mut self, label: L) {
         if let Some(schedules) = self.schedules.get(&std::any::TypeId::of::<L>()) {
             if let Some(Some(schedule)) = schedules.get(label.enumerator()) {
+                // TODO fix this stupid shit
+                let schedule = schedule as *const Schedule;
+                let schedule = unsafe { schedule.as_ref().unwrap() };
                 schedule.execute(self);
             }
         }

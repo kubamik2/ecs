@@ -7,6 +7,8 @@ pub struct Schedule {
 }
 
 impl Schedule {
+    const PARALLEL_EXECUTION_THRESHOLD: usize = 4;
+
     pub fn add_system<M, T: IntoSystem<M> + 'static>(&mut self, system: T) -> Result<(), SystemValidationError> {
         let system = system.into_system();
         system.validate()?;
@@ -15,10 +17,10 @@ impl Schedule {
         Ok(())
     }
 
-    pub fn execute(&self, ecs: &ECS) {
+    pub fn execute(&self, ecs: &mut ECS) {
         ecs.thread_pool.in_place_scope(|scope| {
             for pack in &self.parallel_exeuction_queue {
-                if pack.len() > 4 {
+                if pack.len() > Self::PARALLEL_EXECUTION_THRESHOLD {
                     for i in pack {
                         let system = &self.systems[*i];
                         scope.spawn(|_| {
@@ -33,6 +35,17 @@ impl Schedule {
                 }
             }
         });
+
+        while let Ok(command) = ecs.system_command_receiver.try_recv() {
+            match command {
+                crate::system::SystemCommand::Spawn(spawn) => {
+                    (spawn)(ecs)
+                },
+                crate::system::SystemCommand::Remove(entity) => {
+                    ecs.remove(entity);
+                }
+            }
+        }
     }
 
     fn update_parallel_execution_queue(&mut self) {

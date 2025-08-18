@@ -27,7 +27,7 @@ impl EntityManager {
     }
 
     pub fn spawn(&mut self) -> Entity {
-        assert!(self.entities.len() != MAX_ENTITIES);
+        assert!(self.entities.len() != MAX_ENTITIES, "max entities reached");
         if self.available > 0 {
             let entity = self.next;
             let next = entity.id();
@@ -49,12 +49,10 @@ impl EntityManager {
 }
 
 pub trait EntityBundle {
-    type Data;
     fn spawn(self, ecs: &mut ECS) -> Entity;
 }
 
 impl<C: Component + 'static> EntityBundle for C {
-    type Data = C;
     fn spawn(self, ecs: &mut ECS) -> Entity {
         let entity = ecs.entity_manager.spawn();
         let signature = ecs.component_manager.register_component::<C>();
@@ -67,7 +65,6 @@ impl<C: Component + 'static> EntityBundle for C {
 macro_rules! bundle_typle_impl {
     ($(($idx:tt, $name:ident)),+) => {
         impl<$($name: Component + 'static),+> EntityBundle for ($($name),+) {
-            type Data = ($($name),+);
             fn spawn(self, ecs: &mut ECS) -> Entity {
                 let data = self;
                 let mut signature = Bitmap::new();
