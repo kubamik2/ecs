@@ -1,55 +1,66 @@
 use crate::bitmap::Bitmap;
 
-use super::{Component, ECSError, EntityId, ECS, MAX_ENTITIES};
+use super::{Component, Entity, ECS, MAX_ENTITIES};
 
 pub struct EntityManager {
-    free_entities: Vec<EntityId>,
-    alive_entities: [bool; MAX_ENTITIES],
+    entities: Vec<Entity>,
+    next: Entity,
+    available: usize,
 }
 
 impl Default for EntityManager {
     fn default() -> Self {
-        let free_entities = Vec::from_iter((0..MAX_ENTITIES).rev().map(|id| EntityId::new(id as u32)));
         Self {
-            free_entities,
-            alive_entities: [false; MAX_ENTITIES],
+            entities: vec![Entity::new(0,0)],
+            next: Entity::new(0,0),
+            available: 0,
         }
     }
 }
 
 impl EntityManager {
-    pub fn spawn(&mut self) -> Option<EntityId> {
-        let entity = self.free_entities.pop()?;
-        self.alive_entities[entity.id() as usize] = true;
-        Some(entity)
+    pub fn remove(&mut self, mut entity: Entity) {
+        self.available += 1;
+        self.entities[entity.id() as usize] = self.next;
+        entity.increment_version();
+        self.next = entity;
     }
 
-    pub fn remove(&mut self, entity: EntityId) -> Result<(), ECSError> {
-        if !self.is_alive(entity) { return Err(ECSError::RemoveDeadEntity); }
-        self.alive_entities[entity.id() as usize] = false;
-        self.free_entities.push(entity);
-        Ok(())
+    pub fn spawn(&mut self) -> Entity {
+        assert!(self.entities.len() != MAX_ENTITIES);
+        if self.available > 0 {
+            let entity = self.next;
+            let next = entity.id();
+            self.next = self.entities[next as usize];
+            self.entities[entity.id() as usize] = entity;
+            self.available -= 1;
+            entity
+        } else {
+            let entity = Entity::new(self.entities.len() as u16, 0);
+            self.entities.push(entity);
+            entity
+        }
     }
 
     #[inline]
-    pub const fn is_alive(&self, entity: EntityId) -> bool {
-        self.alive_entities[entity.id() as usize]
+    pub fn is_alive(&self, entity: Entity) -> bool {
+        self.entities[entity.id() as usize] == entity
     }
 }
 
 pub trait EntityBundle {
     type Data;
-    fn spawn(self, ecs: &mut ECS) -> Option<EntityId>;
+    fn spawn(self, ecs: &mut ECS) -> Entity;
 }
 
 impl<C: Component + 'static> EntityBundle for C {
     type Data = C;
-    fn spawn(self, ecs: &mut ECS) -> Option<EntityId> {
-        let entity_id = ecs.entity_manager.spawn()?;
+    fn spawn(self, ecs: &mut ECS) -> Entity {
+        let entity = ecs.entity_manager.spawn();
         let signature = ecs.component_manager.register_component::<C>();
-        ecs.component_manager.spawn_entity(entity_id, signature);
-        unsafe { ecs.component_manager.set_component_limited_checks(entity_id, self) };
-        Some(entity_id)
+        ecs.component_manager.spawn_entity(entity, signature);
+        unsafe { ecs.component_manager.set_component_limited_checks(entity, self) };
+        entity
     }
 }
 
@@ -57,16 +68,16 @@ macro_rules! bundle_typle_impl {
     ($(($idx:tt, $name:ident)),+) => {
         impl<$($name: Component + 'static),+> EntityBundle for ($($name),+) {
             type Data = ($($name),+);
-            fn spawn(self, ecs: &mut ECS) -> Option<EntityId> {
+            fn spawn(self, ecs: &mut ECS) -> Entity {
                 let data = self;
                 let mut signature = Bitmap::new();
                 $(signature |= ecs.component_manager.register_component::<$name>();)+
-                let entity_id = ecs.entity_manager.spawn()?;
-                ecs.component_manager.spawn_entity(entity_id, signature);
+                let entity = ecs.entity_manager.spawn();
+                ecs.component_manager.spawn_entity(entity, signature);
                 unsafe {
-                    $(ecs.component_manager.set_component_limited_checks(entity_id, data.$idx));+;
+                    $(ecs.component_manager.set_component_limited_checks(entity, data.$idx));+;
                 }
-                Some(entity_id)
+                entity
             }
         }
     }

@@ -1,6 +1,6 @@
 use std::{any::TypeId, collections::{hash_map::Entry, HashMap}, mem::MaybeUninit, ops::BitOrAssign};
 
-use crate::{bitmap::Bitmap, sparse_set::{SparseSet, TypelessSparseSet}, Component, EntityId, MAX_COMPONENTS};
+use crate::{bitmap::Bitmap, sparse_set::{SparseSet, TypelessSparseSet}, Component, Entity, MAX_COMPONENTS};
 
 pub type Signature = Bitmap;
 
@@ -15,8 +15,8 @@ pub struct ComponentRecord {
 pub struct ComponentManager {
     component_records: HashMap<TypeId, ComponentRecord>,
     components: [MaybeUninit<TypelessSparseSet>; MAX_COMPONENTS],
-    groups: HashMap<Signature, SparseSet<EntityId>>,
-    entity_signatures: HashMap<EntityId, Signature>,
+    groups: HashMap<Signature, SparseSet<Entity>>,
+    entity_signatures: HashMap<Entity, Signature>,
     component_len: usize,
 }
 
@@ -52,25 +52,17 @@ impl ComponentManager {
         signature
     }
 
-    pub(crate) fn has_component<C: Component>(&self, entity_id: EntityId) -> bool {
-        let Some(component_record) = self.component_records.get(&TypeId::of::<C>()) else { return false; };
-        let Some(entity_signature) = self.entity_signatures.get(&entity_id).copied() else { return false; };
-        let component_signature = component_record.signature;
-
-        entity_signature & component_signature == component_signature
-    }
-
-    pub(crate) fn get_component<C: Component>(&self, entity_id: EntityId) -> Option<&C> {
+    pub(crate) fn get_component<C: Component>(&self, entity: Entity) -> Option<&C> {
         let component_index = self.get_component_index::<C>()?;
-        unsafe { self.get_component_ptr_by_index::<C>(entity_id, component_index).map(|f| f.as_ref().unwrap_unchecked()) }
+        unsafe { self.get_component_ptr_by_index::<C>(entity, component_index).map(|f| f.as_ref().unwrap_unchecked()) }
     }
 
-    pub(crate) fn get_mut_component<C: Component>(&mut self, entity_id: EntityId) -> Option<&mut C> {
+    pub(crate) fn get_mut_component<C: Component>(&mut self, entity: Entity) -> Option<&mut C> {
         let component_index = self.get_component_index::<C>()?;
-        unsafe { self.get_mut_component_ptr_by_index::<C>(entity_id, component_index).map(|f| f.as_mut().unwrap_unchecked()) }
+        unsafe { self.get_mut_component_ptr_by_index::<C>(entity, component_index).map(|f| f.as_mut().unwrap_unchecked()) }
     }
 
-    pub(crate) fn set_component<C: Component>(&mut self, entity_id: EntityId, component: C) {
+    pub(crate) fn set_component<C: Component>(&mut self, entity: Entity, component: C) {
         let components_num = self.component_records.len();
         let component_record = self.component_records
             .entry(TypeId::of::<C>())
@@ -82,7 +74,7 @@ impl ComponentManager {
                     signature_index: components_num as u32,
                 }
             });
-        let Some(entity_signature) = self.entity_signatures.get_mut(&entity_id) else { return; };
+        let Some(entity_signature) = self.entity_signatures.get_mut(&entity) else { return; };
 
         let component_signature = component_record.signature;
         let component_signature_index = component_record.signature_index;
@@ -91,17 +83,17 @@ impl ComponentManager {
 
         if (*entity_signature & component_signature).is_zero() {
             let group = self.groups.get_mut(entity_signature).expect("entity doesnt belong to any groups");
-            group.remove(entity_id);
+            group.remove(entity);
             entity_signature.bitor_assign(component_signature);
             let new_group = self.groups.entry(*entity_signature).or_default();
-            new_group.insert(entity_id, entity_id);
+            new_group.insert(entity, entity);
         }
-        sparse_set.insert(entity_id, component);
+        sparse_set.insert(entity, component);
     }
 
-    pub(crate) fn remove_entity_component<C: Component>(&mut self, entity_id: EntityId) {
+    pub(crate) fn remove_entity_component<C: Component>(&mut self, entity: Entity) {
         let Some(component_record) = self.component_records.get(&TypeId::of::<C>()) else { return; };
-        let Some(entity_signature) = self.entity_signatures.get_mut(&entity_id) else { return; };
+        let Some(entity_signature) = self.entity_signatures.get_mut(&entity) else { return; };
 
         let component_signature = component_record.signature;
         let component_signature_index = component_record.signature_index;
@@ -111,37 +103,37 @@ impl ComponentManager {
             return;
         }
         let group = self.groups.get_mut(entity_signature).expect("entity doesnt belong to any groups");
-        group.remove(entity_id);
+        group.remove(entity);
         entity_signature.bitor_assign(component_signature);
         let new_group = self.groups.entry(*entity_signature).or_default();
-        new_group.insert(entity_id, entity_id);
+        new_group.insert(entity, entity);
 
-        sparse_set.remove(entity_id);
+        sparse_set.remove(entity);
     }
 
-    pub(crate) fn spawn_entity(&mut self, entity_id: EntityId, signature: Signature) {
-        assert!(self.entity_signatures.insert(entity_id, signature).is_none(), "component manager duplicate EntityId");
+    pub(crate) fn spawn_entity(&mut self, entity: Entity, signature: Signature) {
+        assert!(self.entity_signatures.insert(entity, signature).is_none(), "component manager duplicate EntityId");
         let group = self.groups.entry(signature).or_default();
-        group.insert(entity_id, entity_id);
+        group.insert(entity, entity);
     }
 
-    pub(crate) unsafe fn set_component_limited_checks<C: Component>(&mut self, entity_id: EntityId, component: C) {
+    pub(crate) unsafe fn set_component_limited_checks<C: Component>(&mut self, entity: Entity, component: C) {
         let component_record = unsafe { self.component_records.get(&TypeId::of::<C>()).unwrap_unchecked() };
         let component_signature_index = component_record.signature_index;
         let sparse_set = unsafe { self.components[component_signature_index as usize].assume_init_ref().downcast_unchecked::<C>().get().as_mut().unwrap_unchecked() };
-        sparse_set.insert(entity_id, component);
+        sparse_set.insert(entity, component);
     }
 
-    pub(crate) fn remove_entity(&mut self, entity_id: EntityId) {
-        let Some(entity_signature) = self.entity_signatures.remove(&entity_id) else { return; };
+    pub(crate) fn remove_entity(&mut self, entity: Entity) {
+        let Some(entity_signature) = self.entity_signatures.remove(&entity) else { return; };
         let group = self.groups.get_mut(&entity_signature).expect("entity doesnt belong to any groups");
-        group.remove(entity_id);
+        group.remove(entity);
         
         let mut entity_signature_raw = *entity_signature;
         let mut index = 0;
         while entity_signature_raw > 0 {
             if (entity_signature_raw & 1) == 1 {
-                unsafe { self.components[index].assume_init_mut().remove(entity_id) };
+                unsafe { self.components[index].assume_init_mut().remove(entity) };
             }
             entity_signature_raw >>= 1;
             index += 1;
@@ -157,32 +149,32 @@ impl ComponentManager {
         self.component_records.get(&TypeId::of::<C>()).map(|f| f.signature_index)
     }
 
-    pub(crate) fn get_component_ptr_by_index<C: Component>(&self, entity_id: EntityId, component_index: u32) -> Option<*const C> {
+    pub(crate) fn get_component_ptr_by_index<C: Component>(&self, entity: Entity, component_index: u32) -> Option<*const C> {
         let sparse_set = unsafe { self.components[component_index as usize].assume_init_ref().downcast_unchecked::<C>() };
-        unsafe { sparse_set.get().as_ref().unwrap_unchecked().get_ptr(entity_id) }
+        unsafe { sparse_set.get().as_ref().unwrap_unchecked().get_ptr(entity) }
     }
 
-    pub(crate) fn get_mut_component_ptr_by_index<C: Component>(&self, entity_id: EntityId, component_index: u32) -> Option<*mut C> {
+    pub(crate) fn get_mut_component_ptr_by_index<C: Component>(&self, entity: Entity, component_index: u32) -> Option<*mut C> {
         let sparse_set = unsafe { self.components[component_index as usize].assume_init_ref().downcast_unchecked::<C>() };
-        unsafe { sparse_set.get().as_mut().unwrap_unchecked().get_mut_ptr(entity_id) }
+        unsafe { sparse_set.get().as_mut().unwrap_unchecked().get_mut_ptr(entity) }
     }
 
-    pub(crate) fn get_component_ptr_by_index_unchecked<C: Component>(&self, entity_id: EntityId, component_index: u32) -> *const C {
+    pub(crate) fn get_component_ptr_by_index_unchecked<C: Component>(&self, entity: Entity, component_index: u32) -> *const C {
         let sparse_set = unsafe { self.components[component_index as usize].assume_init_ref().downcast_unchecked::<C>() };
-        unsafe { sparse_set.get().as_ref().unwrap_unchecked().get_ptr_unchecked(entity_id) }
+        unsafe { sparse_set.get().as_ref().unwrap_unchecked().get_ptr_unchecked(entity) }
     }
 
-    pub(crate) fn get_mut_component_ptr_by_index_unchecked<C: Component>(&self, entity_id: EntityId, component_index: u32) -> *mut C {
+    pub(crate) fn get_mut_component_ptr_by_index_unchecked<C: Component>(&self, entity: Entity, component_index: u32) -> *mut C {
         let sparse_set = unsafe { self.components[component_index as usize].assume_init_ref().downcast_unchecked::<C>() };
-        unsafe { sparse_set.get().as_mut().unwrap_unchecked().get_mut_ptr_unchecked(entity_id) }
+        unsafe { sparse_set.get().as_mut().unwrap_unchecked().get_mut_ptr_unchecked(entity) }
     }
 
     #[inline]
-    pub(crate) fn groups(&self) -> &HashMap<Signature, SparseSet<EntityId>> {
+    pub(crate) fn groups(&self) -> &HashMap<Signature, SparseSet<Entity>> {
         &self.groups
     }
 
-    pub(crate) fn get_entity_component_signature(&self, entity_id: EntityId) -> Option<Signature> {
-        self.entity_signatures.get(&entity_id).copied()
+    pub(crate) fn get_entity_component_signature(&self, entity: Entity) -> Option<Signature> {
+        self.entity_signatures.get(&entity).copied()
     }
 }

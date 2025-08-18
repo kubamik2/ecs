@@ -9,7 +9,7 @@ pub fn component_derive_macro(item: TokenStream) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     quote::quote! {
-        impl #impl_generics ecs::Component for #ident #ty_generics #where_clause {}
+        impl #impl_generics Component for #ident #ty_generics #where_clause {}
     }.into()
 }
 
@@ -21,6 +21,6 @@ pub fn resource_derive_macro(item: TokenStream) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     quote::quote! {
-        impl #impl_generics ecs::Resource for #ident #ty_generics #where_clause {}
+        impl #impl_generics Resource for #ident #ty_generics #where_clause {}
     }.into()
 }

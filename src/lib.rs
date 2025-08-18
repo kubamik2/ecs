@@ -7,27 +7,48 @@ mod param;
 mod access;
 mod resource;
 mod sparse_set;
+mod schedule;
 
-use std::collections::HashMap;
+use std::{any::TypeId, collections::HashMap, hash::Hash};
 
 pub use query::Query;
-pub use system::Schedule;
 pub use resource::{Res, ResMut};
 pub use derive::{Component, Resource};
+pub use schedule::Schedule;
 
-pub const MAX_ENTITIES: usize = 8192 * 128;
+pub const MAX_ENTITIES: usize = 2_usize.pow(16)-1;
 pub const MAX_COMPONENTS: usize = 128;
 
-#[derive(Hash, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EntityId(u32);
+#[derive(Hash, Clone, Copy, PartialEq, Eq)]
+pub struct Entity {
+    id: u16,
+    version: u16,
+}
 
-impl EntityId {
-    pub(crate) const fn new(id: u32) -> Self {
-        Self(id)
+impl Entity {
+    pub(crate) const fn new(id: u16, version: u16) -> Self {
+        assert!(id as usize <= MAX_ENTITIES);
+        Self { id, version }
     }
 
-    pub const fn id(&self) -> u32 {
-        self.0
+    #[inline(always)]
+    pub const fn version(&self) -> u16 {
+        self.version
+    }
+
+    #[inline(always)]
+    pub const fn id(&self) -> u16 {
+        self.id
+    }
+
+    pub(crate) const fn increment_version(&mut self) {
+        self.version += 1;
+    }
+}
+
+impl std::fmt::Debug for Entity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{}v{}", self.id(), self.version()))
     }
 }
 
@@ -39,7 +60,7 @@ pub struct ECS {
     pub(crate) entity_manager: entity_manager::EntityManager,
     pub(crate) resource_manager: resource::ResourceManager,
     pub(crate) thread_pool: rayon::ThreadPool,
-    schedules: HashMap<String, Schedule>,
+    schedules: HashMap<TypeId, Vec<Option<Schedule>>>,
 }
 
 impl Default for ECS {
@@ -68,36 +89,39 @@ impl ECS {
         })
     }
 
-    pub fn spawn<T: entity_manager::EntityBundle>(&mut self, components: T) -> Option<EntityId> {
+    pub fn spawn<T: entity_manager::EntityBundle>(&mut self, components: T) -> Entity {
         components.spawn(self)
     }
 
-    pub fn remove(&mut self, entity_id: EntityId) {
-        if self.entity_manager.remove(entity_id).is_ok() {
-            self.component_manager.remove_entity(entity_id);
+    pub fn remove(&mut self, entity: Entity) {
+        if self.entity_manager.is_alive(entity) {
+            self.entity_manager.remove(entity);
+            self.component_manager.remove_entity(entity);
         }
     }
 
     #[inline]
-    pub const fn is_alive(&self, entity_id: EntityId) -> bool {
-        self.entity_manager.is_alive(entity_id)
+    pub fn is_alive(&self, entity: Entity) -> bool {
+        self.entity_manager.is_alive(entity)
     }
 
-    pub fn set_component<C: Component>(&mut self, entity_id: EntityId, component: C) {
-        self.component_manager.set_component(entity_id, component);
+    pub fn set_component<C: Component>(&mut self, entity: Entity, component: C) {
+        self.component_manager.set_component(entity, component);
     }
 
-    pub fn get_component<C: Component>(&self, entity_id: EntityId) -> Option<&C> {
-        self.component_manager.get_component(entity_id)
+    pub fn get_component<C: Component>(&self, entity: Entity) -> Option<&C> {
+        self.component_manager.get_component(entity)
     }
 
-    pub fn get_mut_component<T: Component>(&mut self, entity_id: EntityId) -> Option<&mut T> {
-        self.component_manager.get_mut_component(entity_id)
+    pub fn get_mut_component<T: Component>(&mut self, entity: Entity) -> Option<&mut T> {
+        self.component_manager.get_mut_component(entity)
     }
 
-    pub fn execute_schedule(&self, name: &str) {
-        if let Some(schedule) = self.schedules.get(name) {
-            schedule.execute(self);
+    pub fn execute_schedule<L: schedule::ScheduleLabel>(&self, label: L) {
+        if let Some(schedules) = self.schedules.get(&std::any::TypeId::of::<L>()) {
+            if let Some(Some(schedule)) = schedules.get(label.enumerator()) {
+                schedule.execute(self);
+            }
         }
     }
 
@@ -105,22 +129,112 @@ impl ECS {
         self.resource_manager.insert(resource);
     }
 
-    pub fn remove_resource<R: Resource>(&mut self) -> Option<Box<R>> {
+    pub fn remove_resource<R: Resource>(&mut self) -> Option<R> {
         self.resource_manager.remove()
     }
 
-    pub fn insert_schedule(&mut self, name: String, schedule: Schedule) {
-        self.schedules.insert(name, schedule);
+    pub fn insert_schedule<L: schedule::ScheduleLabel>(&mut self, label: L, schedule: Schedule) {
+        let schedules = self.schedules.entry(std::any::TypeId::of::<L>()).or_default();
+        let index = label.enumerator();
+        if index >= schedules.len() {
+            schedules.resize_with(index+1, || None);
+        }
+        schedules[index] = Some(schedule);
     }
 
-    pub fn get_mut_schedule(&mut self, name: &str) -> Option<&mut Schedule> {
-        self.schedules.get_mut(name)
+    pub fn get_mut_schedule<L: schedule::ScheduleLabel>(&mut self, label: L) -> Option<&mut Schedule> {
+        let schedules = self.schedules.get_mut(&std::any::TypeId::of::<L>())?;
+        schedules.get_mut(label.enumerator()).and_then(|f| f.as_mut())
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ECSError {
-    RemoveDeadEntity,
-    MultipleMutRefs,
-    IncompatibleRefs,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Component)]
+    struct ComponentA {
+        a: u128,
+        b: u64,
+        c: u32,
+        d: u16,
+        e: u8,
+    }
+
+    impl ComponentA {
+        fn new(i: usize) -> Self {
+            Self {
+                a: i as u128,
+                b: i as u64,
+                c: i as u32,
+                d: i as u16,
+                e: i as u8,
+            }
+        }
+    }
+
+    impl ComponentA {
+        fn validate(&self, i: usize) -> bool {
+            let a = self.a;
+            let b = self.b as u128;
+            let c = self.c as u128;
+            let d = self.d as u128;
+            let e = self.e as u128;
+            i as u128 == a && a == b && b == c && c == d && d == e
+        }
+    }
+
+    #[derive(Component)]
+    struct ComponentB(String);
+    impl ComponentB {
+        fn validate(&self, i: usize) -> bool {
+            format!("{i}") == self.0
+        }
+    }
+
+    #[test]
+    fn get_component() {
+        let mut ecs = ECS::default();
+        let mut entities = vec![];
+        for i in 0..100 {
+            let entity = ecs.spawn((
+                ComponentA::new(i),
+                ComponentB(format!("{i}")),
+            ));
+            entities.push(entity);
+        }
+        (0..100).for_each(|i| {
+            let component = ecs.get_component::<ComponentA>(entities[i]).expect("get_component ComponentA not found");
+            assert!(component.validate(i), "ComponentA validation failed");
+        });
+        (0..100).for_each(|i| {
+            let component = ecs.get_component::<ComponentB>(entities[i]).expect("get_component ComponentB not found");
+            assert!(component.validate(i), "ComponentB validation failed");
+        });
+    }
+
+    #[test]
+    fn set_component() {
+        let mut ecs = ECS::default();
+        let mut entities = vec![];
+        for i in 0..100 {
+            let entity = ecs.spawn((
+                ComponentA::new(i),
+                ComponentB(format!("{i}")),
+            ));
+            entities.push(entity);
+        }
+        (0..100).for_each(|i| {
+            ecs.set_component(entities[i], ComponentA::new(i+1));
+            ecs.set_component(entities[i], ComponentB(format!("{}", i+1)));
+        });
+        (0..100).for_each(|i| {
+            let component = ecs.get_component::<ComponentA>(entities[i]).unwrap();
+            assert!(component.validate(i+1), "ComponentA validation failed");
+        });
+        (0..100).for_each(|i| {
+            let component = ecs.get_component::<ComponentB>(entities[i]).unwrap();
+            assert!(component.validate(i+1), "ComponentB validation failed");
+        });
+    }
 }

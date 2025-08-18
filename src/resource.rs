@@ -25,10 +25,10 @@ impl ResourceManager {
         self.resources.insert(TypeId::of::<R>(), SyncUnsafeCell::new(Box::new(resource)));
     }
 
-    pub fn remove<R: Resource + Send + Sync + 'static>(&mut self) -> Option<Box<R>> {
+    pub fn remove<R: Resource + Send + Sync + 'static>(&mut self) -> Option<R> {
         self.resources
             .remove(&TypeId::of::<R>())
-            .and_then(|f| f.into_inner().downcast::<R>().ok())
+            .map(|f| *f.into_inner().downcast::<R>().expect("ResourceManager::remove invalid cast"))
     }
 }
 

@@ -1,4 +1,4 @@
-use super::{access::Access, param::SystemFunc, ECSError, ECS};
+use super::{access::Access, param::SystemFunc, ECS};
 
 pub trait System {
     fn execute(&self, ecs: &ECS);
@@ -8,82 +8,32 @@ pub trait System {
         self.component_access().is_compatible(other_component_access) &&
         self.resource_access().is_compatible(other_resource_access)
     }
-}
-
-#[derive(Default)]
-pub struct Schedule {
-    systems: Vec<Box<dyn System + Send + Sync>>,
-    parallel_exeuction_queue: Vec<Vec<usize>>,
-}
-
-impl Schedule {
-    pub fn add_system<M, T: IntoSystem<M> + 'static>(&mut self, system: T) -> Result<(), ECSError> {
-        let system = system.into_system();
-        let component_access = system.component_access();
+    fn validate(&self) -> Result<(), SystemValidationError> {
+        let component_access = self.component_access();
+        let resource_access = self.resource_access();
         if component_access.mutable_count as usize > component_access.mutable.len() {
-            return Err(ECSError::MultipleMutRefs);
+            return Err(SystemValidationError::MultipleComponentMutRefs);
         }
         if component_access.immutable.intersection(&component_access.mutable).next().is_some() {
-            return Err(ECSError::IncompatibleRefs);
+            return Err(SystemValidationError::IncompatibleComponentRefs);
         }
-        self.systems.push(system);
-        self.update_parallel_execution_queue();
+        if resource_access.mutable_count as usize > resource_access.mutable.len() {
+            return Err(SystemValidationError::MultipleResourceMutRefs);
+        }
+        if resource_access.immutable.intersection(&resource_access.mutable).next().is_some() {
+            return Err(SystemValidationError::IncompatibleResourceRefs);
+        }
         Ok(())
-    }
-
-    pub fn execute(&self, ecs: &ECS) {
-        ecs.thread_pool.in_place_scope(|scope| {
-            for pack in &self.parallel_exeuction_queue {
-                for i in pack {
-                    let system = &self.systems[*i];
-                    scope.spawn(|_| {
-                        system.execute(ecs);
-                    });
-                }
-            }
-        });
-    }
-
-    fn update_parallel_execution_queue(&mut self) {
-        let mut parallel_exeuction_queue = vec![];
-        let mut added_systems = vec![false; self.systems.len()];
-
-        // TODO
-        // O(n^2) might want to improve this, although there shouldn't be
-        // that many systems for this to be a major slowdown
-        for i in 0..self.systems.len() {
-            if added_systems[i] { continue; }
-            added_systems[i] = true;
-            let mut systems = vec![i];
-            let system = self.systems[i].as_ref();
-            let mut joined_component_access = system.component_access().clone();
-            let mut joined_resource_access = system.resource_access().clone();
-
-            for j in i+1..self.systems.len() {
-                if added_systems[j] { continue; }
-                let other_system = self.systems[j].as_ref();
-
-                if other_system.is_comp(&joined_component_access, &joined_resource_access) {
-                    added_systems[j] = true;
-                    let component_access = other_system.component_access();
-                    let resource_access = other_system.resource_access();
-
-                    joined_component_access.join(component_access);
-                    joined_resource_access.join(resource_access);
-
-                    systems.push(j);
-                }
-            }
-
-            parallel_exeuction_queue.push(systems);
-        }
-
-        self.parallel_exeuction_queue = parallel_exeuction_queue;
     }
 }
 
-unsafe impl Send for Schedule {}
-unsafe impl Sync for Schedule {}
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SystemValidationError {
+    MultipleComponentMutRefs,
+    IncompatibleComponentRefs,
+    MultipleResourceMutRefs,
+    IncompatibleResourceRefs,
+}
 
 pub struct FunctionSystem<M, F: SystemFunc<M>> {
     component_access: Access,
