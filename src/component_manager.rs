@@ -91,13 +91,13 @@ impl ComponentManager {
         sparse_set.insert(entity, component);
     }
 
-    pub(crate) fn remove_entity_component<C: Component>(&mut self, entity: Entity) {
+    pub(crate) fn remove_component<C: Component>(&mut self, entity: Entity) {
         let Some(component_record) = self.component_records.get(&TypeId::of::<C>()) else { return; };
         let Some(entity_signature) = self.entity_signatures.get_mut(&entity) else { return; };
 
         let component_signature = component_record.signature;
         let component_signature_index = component_record.signature_index;
-        
+
         let sparse_set = unsafe { self.components[component_signature_index as usize].assume_init_ref().downcast_unchecked::<C>().get().as_mut().unwrap_unchecked() };
         if (*entity_signature & component_signature).is_zero() {
             return;

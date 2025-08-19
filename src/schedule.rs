@@ -1,4 +1,6 @@
-use crate::{system::{IntoSystem, System, SystemValidationError}, ECS};
+use std::{any::{Any, TypeId}, collections::HashMap, hash::Hash};
+
+use crate::{system::{IntoSystem, System, SystemInput, SystemValidationError}, Resource, ECS};
 
 #[derive(Default)]
 pub struct Schedule {
@@ -9,15 +11,14 @@ pub struct Schedule {
 impl Schedule {
     const PARALLEL_EXECUTION_THRESHOLD: usize = 4;
 
-    pub fn add_system<M, T: IntoSystem<M> + 'static>(&mut self, system: T) -> Result<(), SystemValidationError> {
+    pub fn add_system<In: SystemInput, T: IntoSystem<In> + 'static>(&mut self, system: T) -> Result<(), SystemValidationError> {
         let system = system.into_system();
         system.validate()?;
-        self.systems.push(system);
-        self.update_parallel_execution_queue();
+        self.systems.push(system); self.update_parallel_execution_queue();
         Ok(())
     }
 
-    pub fn execute(&self, ecs: &mut ECS) {
+    pub(crate) fn execute(&self, ecs: &ECS) {
         ecs.thread_pool.in_place_scope(|scope| {
             for pack in &self.parallel_exeuction_queue {
                 if pack.len() > Self::PARALLEL_EXECUTION_THRESHOLD {
@@ -35,17 +36,11 @@ impl Schedule {
                 }
             }
         });
+    }
 
-        while let Ok(command) = ecs.system_command_receiver.try_recv() {
-            match command {
-                crate::system::SystemCommand::Spawn(spawn) => {
-                    (spawn)(ecs)
-                },
-                crate::system::SystemCommand::Remove(entity) => {
-                    ecs.remove(entity);
-                }
-            }
-        }
+    pub fn run(&self, ecs: &mut ECS) {
+        self.execute(ecs);
+        ecs.handle_commands();
     }
 
     fn update_parallel_execution_queue(&mut self) {
@@ -87,6 +82,35 @@ impl Schedule {
     }
 }
 
-pub trait ScheduleLabel: 'static {
-    fn enumerator(&self) -> usize;
+pub trait ScheduleLabel: 'static + PartialEq + Eq + Hash {
+}
+
+#[derive(Default)]
+pub struct Schedules(HashMap<TypeId, Box<dyn Any>>);
+
+unsafe impl Send for Schedules {}
+unsafe impl Sync for Schedules {}
+
+impl Resource for Schedules {}
+
+impl Schedules {
+    pub fn get<L: ScheduleLabel>(&self, label: &L) -> Option<&Schedule> {
+        let boxed_type_schedules = self.0.get(&TypeId::of::<L>())?;
+        let type_schedules = unsafe { boxed_type_schedules.downcast_ref_unchecked::<HashMap<L, Schedule>>() };
+        type_schedules.get(label)
+    }
+
+    pub fn get_mut<L: ScheduleLabel>(&mut self, label: &L) -> Option<&mut Schedule> {
+        let boxed_type_schedules = self.0.get_mut(&TypeId::of::<L>())?;
+        let type_schedules = unsafe { boxed_type_schedules.downcast_mut_unchecked::<HashMap<L, Schedule>>() };
+        type_schedules.get_mut(label)
+    }
+
+    pub fn insert<L : ScheduleLabel>(&mut self, label: L, schedule: Schedule) {
+        let boxed_type_schedules = self.0
+            .entry(TypeId::of::<L>())
+            .or_insert(Box::new(HashMap::<L, Schedule>::default()));
+        let type_schedules = unsafe { boxed_type_schedules.downcast_mut_unchecked::<HashMap<L, Schedule>>() };
+        type_schedules.insert(label, schedule);
+    }
 }

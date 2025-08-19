@@ -8,14 +8,16 @@ mod access;
 mod resource;
 mod sparse_set;
 mod schedule;
-
-use std::{any::TypeId, collections::HashMap, hash::Hash};
+mod signal;
+mod event;
+mod observer_manager;
 
 pub use query::Query;
 pub use resource::{Res, ResMut};
 pub use derive::{Component, Resource};
-pub use schedule::Schedule;
+pub use schedule::{Schedule, Schedules};
 pub use system::Commands;
+pub use signal::Signal;
 
 pub const MAX_ENTITIES: usize = 2_usize.pow(16)-1;
 pub const MAX_COMPONENTS: usize = 128;
@@ -61,7 +63,6 @@ pub struct ECS {
     pub(crate) entity_manager: entity_manager::EntityManager,
     pub(crate) resource_manager: resource::ResourceManager,
     pub(crate) thread_pool: rayon::ThreadPool,
-    schedules: HashMap<TypeId, Vec<Option<Schedule>>>,
     system_command_receiver: std::sync::mpsc::Receiver<system::SystemCommand>,
     pub(crate) system_command_sender: std::sync::mpsc::Sender<system::SystemCommand>,
 }
@@ -79,15 +80,18 @@ impl ECS {
     const DEFAULT_THREAD_COUND: usize = 16;
     pub fn new(num_threads: usize) -> Result<Self, rayon::ThreadPoolBuildError> {
         let (system_command_sender, system_command_receiver) = std::sync::mpsc::channel();
-        Ok(Self {
+        let mut ecs = Self {
             component_manager: Default::default(),
             entity_manager: Default::default(),
             resource_manager: Default::default(),
             thread_pool: rayon::ThreadPoolBuilder::new().num_threads(num_threads).build()?,
-            schedules: Default::default(),
             system_command_receiver,
             system_command_sender,
-        })
+        };
+
+        ecs.insert_resource(schedule::Schedules::default());
+
+        Ok(ecs)
     }
 
     pub fn spawn<B: entity_manager::EntityBundle>(&mut self, components: B) -> Entity {
@@ -110,6 +114,10 @@ impl ECS {
         self.component_manager.set_component(entity, component);
     }
 
+    pub fn remove_component<C: Component>(&mut self, entity: Entity) {
+        self.component_manager.remove_component::<C>(entity);
+    }
+
     pub fn get_component<C: Component>(&self, entity: Entity) -> Option<&C> {
         self.component_manager.get_component(entity)
     }
@@ -118,15 +126,11 @@ impl ECS {
         self.component_manager.get_mut_component(entity)
     }
 
-    pub fn execute_schedule<L: schedule::ScheduleLabel>(&mut self, label: L) {
-        if let Some(schedules) = self.schedules.get(&std::any::TypeId::of::<L>()) {
-            if let Some(Some(schedule)) = schedules.get(label.enumerator()) {
-                // TODO fix this stupid shit
-                let schedule = schedule as *const Schedule;
-                let schedule = unsafe { schedule.as_ref().unwrap() };
-                schedule.execute(self);
-            }
-        }
+    pub fn run_schedule<L: schedule::ScheduleLabel>(&mut self, label: &L) {
+        let schedules = self.get_resource::<Schedules>().expect("Schedules not initialized");
+        let Some(schedule) = schedules.get(label) else { return; };
+        schedule.execute(self);
+        self.handle_commands();
     }
 
     pub fn insert_resource<R: Resource>(&mut self, resource: R) {
@@ -137,18 +141,36 @@ impl ECS {
         self.resource_manager.remove()
     }
 
-    pub fn insert_schedule<L: schedule::ScheduleLabel>(&mut self, label: L, schedule: Schedule) {
-        let schedules = self.schedules.entry(std::any::TypeId::of::<L>()).or_default();
-        let index = label.enumerator();
-        if index >= schedules.len() {
-            schedules.resize_with(index+1, || None);
-        }
-        schedules[index] = Some(schedule);
+    pub fn get_resource<R: Resource>(&self) -> Option<Res<'_, R>> {
+        self.resource_manager.get::<R>()
     }
 
-    pub fn get_mut_schedule<L: schedule::ScheduleLabel>(&mut self, label: L) -> Option<&mut Schedule> {
-        let schedules = self.schedules.get_mut(&std::any::TypeId::of::<L>())?;
-        schedules.get_mut(label.enumerator()).and_then(|f| f.as_mut())
+    pub fn get_mut_resource<R: Resource>(&mut self) -> Option<ResMut<'_, R>> {
+        self.resource_manager.get_mut::<R>()
+    }
+
+    pub fn insert_schedule<L: schedule::ScheduleLabel>(&mut self, label: L, schedule: Schedule) {
+        let mut schedules = self.get_mut_resource::<Schedules>().expect("Schedules not initialized");
+        schedules.insert(label, schedule);
+    }
+
+    fn handle_commands(&mut self) {
+        while let Ok(command) = self.system_command_receiver.try_recv() {
+            match command {
+                crate::system::SystemCommand::Spawn(spawn) => {
+                    (spawn)(self)
+                },
+                crate::system::SystemCommand::Remove(entity) => {
+                    self.remove(entity);
+                },
+                crate::system::SystemCommand::SetComponent(set_component) => {
+                    (set_component)(self);
+                },
+                crate::system::SystemCommand::RemoveComponent(remove_component) => {
+                    (remove_component)(self);
+                },
+            }
+        }
     }
 }
 

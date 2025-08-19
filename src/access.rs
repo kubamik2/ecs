@@ -20,3 +20,9 @@ impl Access {
         self.mutable_count += other.mutable_count;
     }
 }
+
+#[derive(Default, Clone)]
+pub struct SignalAccess {
+    pub required: HashSet<TypeId>,
+    pub optional: HashSet<TypeId>,
+}

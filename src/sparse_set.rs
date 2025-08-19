@@ -11,7 +11,9 @@ impl TypelessSparseSet {
     pub fn new<T: 'static>(sparse_set: SparseSet<T>) -> Self {
         Self {
             sparse_set: Box::new(SyncUnsafeCell::new(sparse_set)),
-            remove_ptr: |sparse_set, entity| unsafe { sparse_set.downcast_mut::<SparseSet<T>>().unwrap_unchecked() }.remove(entity),
+            remove_ptr: |sparse_set, entity| unsafe {
+                sparse_set.downcast_mut_unchecked::<SyncUnsafeCell<SparseSet<T>>>().get_mut()
+            }.remove(entity),
         }
     }
 
