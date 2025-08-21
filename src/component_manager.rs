@@ -5,11 +5,21 @@ use crate::{bitmap::Bitmap, sparse_set::{SparseSet, TypelessSparseSet}, Componen
 pub type Signature = Bitmap;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ComponentId(u32);
+pub struct ComponentId(usize);
+
+impl ComponentId {
+    pub fn id(&self) -> usize {
+        self.0
+    }
+
+    pub(crate) fn as_signature(&self) -> Signature {
+        Signature::new().with_set(self.0)
+    }
+}
 
 pub struct ComponentRecord {
     signature: Signature,
-    signature_index: u32,
+    id: ComponentId,
 }
 
 pub struct ComponentManager {
@@ -33,33 +43,33 @@ impl Default for ComponentManager {
 }
 
 impl ComponentManager {
-    pub(crate) fn register_component<C: Component>(&mut self) -> Signature {
-        let signature = match self.component_records.entry(TypeId::of::<C>()) {
+    pub(crate) fn register_component<C: Component>(&mut self) -> ComponentId {
+        match self.component_records.entry(TypeId::of::<C>()) {
             Entry::Vacant(vacant) => {
+                let id = ComponentId(self.component_len);
                 let signature = Bitmap::new().with_set(self.component_len);
                 vacant.insert(ComponentRecord {
                     signature,
-                    signature_index: self.component_len as u32,
+                    id,
                 });
                 self.components[self.component_len] = MaybeUninit::new(TypelessSparseSet::new(SparseSet::<C>::new()));
                 self.component_len += 1;
-                signature
+                id
             },
             Entry::Occupied(occupied) => {
-                occupied.get().signature
+                occupied.get().id
             },
-        };
-        signature
+        }
     }
 
     pub(crate) fn get_component<C: Component>(&self, entity: Entity) -> Option<&C> {
-        let component_index = self.get_component_index::<C>()?;
-        unsafe { self.get_component_ptr_by_index::<C>(entity, component_index).map(|f| f.as_ref().unwrap_unchecked()) }
+        let component_id = self.get_component_id::<C>()?;
+        unsafe { self.get_component_ptr_by_index::<C>(entity, component_id).map(|f| f.as_ref().unwrap_unchecked()) }
     }
 
     pub(crate) fn get_mut_component<C: Component>(&mut self, entity: Entity) -> Option<&mut C> {
-        let component_index = self.get_component_index::<C>()?;
-        unsafe { self.get_mut_component_ptr_by_index::<C>(entity, component_index).map(|f| f.as_mut().unwrap_unchecked()) }
+        let component_id = self.get_component_id::<C>()?;
+        unsafe { self.get_mut_component_ptr_by_index::<C>(entity, component_id).map(|f| f.as_mut().unwrap_unchecked()) }
     }
 
     pub(crate) fn set_component<C: Component>(&mut self, entity: Entity, component: C) {
@@ -71,15 +81,15 @@ impl ComponentManager {
                 self.component_len += 1;
                 ComponentRecord {
                     signature: Bitmap::new().with_set(components_num),
-                    signature_index: components_num as u32,
+                    id: ComponentId(components_num),
                 }
             });
         let Some(entity_signature) = self.entity_signatures.get_mut(&entity) else { return; };
 
         let component_signature = component_record.signature;
-        let component_signature_index = component_record.signature_index;
+        let component_id = component_record.id;
 
-        let sparse_set = unsafe { self.components[component_signature_index as usize].assume_init_ref().downcast_unchecked::<C>().get().as_mut().unwrap_unchecked() };
+        let sparse_set = unsafe { self.components[component_id.0].assume_init_ref().downcast_unchecked::<C>().get().as_mut().unwrap_unchecked() };
 
         if (*entity_signature & component_signature).is_zero() {
             let group = self.groups.get_mut(entity_signature).expect("entity doesnt belong to any groups");
@@ -96,9 +106,9 @@ impl ComponentManager {
         let Some(entity_signature) = self.entity_signatures.get_mut(&entity) else { return; };
 
         let component_signature = component_record.signature;
-        let component_signature_index = component_record.signature_index;
+        let component_id = component_record.id;
 
-        let sparse_set = unsafe { self.components[component_signature_index as usize].assume_init_ref().downcast_unchecked::<C>().get().as_mut().unwrap_unchecked() };
+        let sparse_set = unsafe { self.components[component_id.0].assume_init_ref().downcast_unchecked::<C>().get().as_mut().unwrap_unchecked() };
         if (*entity_signature & component_signature).is_zero() {
             return;
         }
@@ -119,8 +129,8 @@ impl ComponentManager {
 
     pub(crate) unsafe fn set_component_limited_checks<C: Component>(&mut self, entity: Entity, component: C) {
         let component_record = unsafe { self.component_records.get(&TypeId::of::<C>()).unwrap_unchecked() };
-        let component_signature_index = component_record.signature_index;
-        let sparse_set = unsafe { self.components[component_signature_index as usize].assume_init_ref().downcast_unchecked::<C>().get().as_mut().unwrap_unchecked() };
+        let component_id = component_record.id;
+        let sparse_set = unsafe { self.components[component_id.0].assume_init_ref().downcast_unchecked::<C>().get().as_mut().unwrap_unchecked() };
         sparse_set.insert(entity, component);
     }
 
@@ -145,27 +155,27 @@ impl ComponentManager {
         Some(record.signature)
     }
 
-    pub(crate) fn get_component_index<C: Component>(&self) -> Option<u32> {
-        self.component_records.get(&TypeId::of::<C>()).map(|f| f.signature_index)
+    pub(crate) fn get_component_id<C: Component>(&self) -> Option<ComponentId> {
+        self.component_records.get(&TypeId::of::<C>()).map(|f| f.id)
     }
 
-    pub(crate) fn get_component_ptr_by_index<C: Component>(&self, entity: Entity, component_index: u32) -> Option<*const C> {
-        let sparse_set = unsafe { self.components[component_index as usize].assume_init_ref().downcast_unchecked::<C>() };
+    pub(crate) fn get_component_ptr_by_index<C: Component>(&self, entity: Entity, component_id: ComponentId) -> Option<*const C> {
+        let sparse_set = unsafe { self.components[component_id.0].assume_init_ref().downcast_unchecked::<C>() };
         unsafe { sparse_set.get().as_ref().unwrap_unchecked().get_ptr(entity) }
     }
 
-    pub(crate) fn get_mut_component_ptr_by_index<C: Component>(&self, entity: Entity, component_index: u32) -> Option<*mut C> {
-        let sparse_set = unsafe { self.components[component_index as usize].assume_init_ref().downcast_unchecked::<C>() };
+    pub(crate) fn get_mut_component_ptr_by_index<C: Component>(&self, entity: Entity, component_id: ComponentId) -> Option<*mut C> {
+        let sparse_set = unsafe { self.components[component_id.0].assume_init_ref().downcast_unchecked::<C>() };
         unsafe { sparse_set.get().as_mut().unwrap_unchecked().get_mut_ptr(entity) }
     }
 
-    pub(crate) fn get_component_ptr_by_index_unchecked<C: Component>(&self, entity: Entity, component_index: u32) -> *const C {
-        let sparse_set = unsafe { self.components[component_index as usize].assume_init_ref().downcast_unchecked::<C>() };
+    pub(crate) fn get_component_ptr_by_index_unchecked<C: Component>(&self, entity: Entity, component_id: ComponentId) -> *const C {
+        let sparse_set = unsafe { self.components[component_id.0].assume_init_ref().downcast_unchecked::<C>() };
         unsafe { sparse_set.get().as_ref().unwrap_unchecked().get_ptr_unchecked(entity) }
     }
 
-    pub(crate) fn get_mut_component_ptr_by_index_unchecked<C: Component>(&self, entity: Entity, component_index: u32) -> *mut C {
-        let sparse_set = unsafe { self.components[component_index as usize].assume_init_ref().downcast_unchecked::<C>() };
+    pub(crate) fn get_mut_component_ptr_by_index_unchecked<C: Component>(&self, entity: Entity, component_id: ComponentId) -> *mut C {
+        let sparse_set = unsafe { self.components[component_id.0].assume_init_ref().downcast_unchecked::<C>() };
         unsafe { sparse_set.get().as_mut().unwrap_unchecked().get_mut_ptr_unchecked(entity) }
     }
 

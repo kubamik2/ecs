@@ -4,7 +4,7 @@ use std::{any::TypeId, collections::HashSet};
 pub struct Access {
     pub immutable: HashSet<TypeId>,
     pub mutable: HashSet<TypeId>,
-    pub mutable_count: u32
+    pub mutable_count: u32,
 }
 
 impl Access {

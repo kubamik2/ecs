@@ -1,12 +1,14 @@
-use crate::{access::SignalAccess, entity_manager::EntityBundle, param::{SystemParam, ObserverParam}, Component, Entity};
+use crate::{access::SignalAccess, entity_manager::EntityBundle, param::SystemParam, Component, Entity};
 
 use super::{access::Access, ECS};
 
 pub trait System {
-    fn execute(&self, ecs: &ECS);
+    fn name(&self) -> &'static str;
+    fn execute(&mut self, ecs: &ECS);
     fn component_access(&self) -> &Access;
     fn resource_access(&self) -> &Access;
     fn signal_access(&self) -> &SignalAccess;
+    fn init_state(&mut self, ecs: &mut ECS);
     fn is_comp(&self, other_component_access: &Access, other_resource_access: &Access) -> bool {
         self.component_access().is_compatible(other_component_access) &&
         self.resource_access().is_compatible(other_resource_access)
@@ -14,8 +16,7 @@ pub trait System {
     fn validate(&self) -> Result<(), SystemValidationError> {
         let component_access = self.component_access();
         let resource_access = self.resource_access();
-        if component_access.mutable_count as usize > component_access.mutable.len() {
-            return Err(SystemValidationError::MultipleComponentMutRefs);
+        if component_access.mutable_count as usize > component_access.mutable.len() { return Err(SystemValidationError::MultipleComponentMutRefs);
         }
         if component_access.immutable.intersection(&component_access.mutable).next().is_some() {
             return Err(SystemValidationError::IncompatibleComponentRefs);
@@ -39,6 +40,8 @@ pub enum SystemValidationError {
 }
 
 pub struct FunctionSystem<In, F: SystemFunc<In>> {
+    name: &'static str,
+    state: Option<F::State>,
     component_access: Access,
     resource_access: Access,
     signal_access: SignalAccess,
@@ -46,15 +49,11 @@ pub struct FunctionSystem<In, F: SystemFunc<In>> {
     _a: std::marker::PhantomData<In>,
 }
 
-pub trait SystemFunc<In> {
-    fn run(&self, ecs: &ECS);
-    fn join_component_access(component_access: &mut Access);
-    fn join_resource_access(resource_access: &mut Access);
-}
-
 impl<In, F: SystemFunc<In>> System for FunctionSystem<In, F> {
-    fn execute(&self, ecs: &ECS) {
-        self.func.run(ecs);
+    fn execute(&mut self, ecs: &ECS) {
+        let name = self.name;
+        let state = self.state.as_mut().unwrap_or_else(|| panic!("system '{}' has been executed without initialization", name));
+        self.func.run(ecs, state);
     }
 
     fn component_access(&self) -> &Access {
@@ -68,13 +67,31 @@ impl<In, F: SystemFunc<In>> System for FunctionSystem<In, F> {
     fn signal_access(&self) -> &SignalAccess {
         &self.signal_access
     }
+
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn init_state(&mut self, ecs: &mut ECS) {
+        self.state = Some(F::init_state(ecs));
+    }
+}
+
+pub trait SystemFunc<In> {
+    type State: Send + Sync;
+    fn name(&self) -> &'static str;
+    fn run(&self, ecs: &ECS, state: &mut Self::State);
+    fn join_component_access(component_access: &mut Access);
+    fn join_resource_access(resource_access: &mut Access);
+    fn init_state(ecs: &mut ECS) -> Self::State;
 }
 
 impl<F> SystemFunc<()> for F where 
     F: Send + Sync + 'static,
     for<'a> &'a F: FnMut()
 {
-    fn run(&self, _: &ECS) {
+    type State = ();
+    fn run(&self, _: &ECS, _: &mut Self::State) {
         fn call(mut f: impl FnMut()) {
             f()
         }
@@ -84,25 +101,65 @@ impl<F> SystemFunc<()> for F where
     fn join_resource_access(_: &mut Access) {}
 
     fn join_component_access(_: &mut Access) {}
+
+    fn name(&self) -> &'static str {
+        std::any::type_name::<F>()
+    }
+
+    fn init_state(_: &mut ECS) -> Self::State {}
+}
+
+impl<F, In> SystemFunc<In> for F where 
+    F: Send + Sync + 'static,
+    for<'a> &'a F:
+        FnMut(In) +
+        FnMut(In::Item<'a>),
+    In: for<'a> SystemParam + 'static,
+{
+    type State = In::State;
+    fn run(&self, ecs: &ECS, state: &mut Self::State) {
+        fn call<In>(mut f: impl FnMut(In), p: In) {
+            f(p)
+        }
+        let p = In::fetch(ecs, state);
+        call(self, p);
+    }
+
+    fn join_component_access(component_access: &mut Access) {
+        In::join_component_access(component_access);
+    }
+
+    fn join_resource_access(resource_access: &mut Access) {
+        In::join_resource_access(resource_access);
+    }
+
+    fn name(&self) -> &'static str {
+        std::any::type_name::<F>()
+    }
+
+    fn init_state(ecs: &mut ECS) -> Self::State {
+        In::init_state(ecs)
+    }
 }
 
 macro_rules! system_func_impl {
-    ($(($param:ident, $p:ident)),+) => {
+    ($(($i:tt, $param:ident, $p:ident)),+) => {
         #[allow(unused_parens)]
         impl<F, $($param),+> SystemFunc<($($param),+)> for F where
             F: Send + Sync + 'static,
-            for<'a> &'a F: FnMut($($param),+),
+            for<'a> &'a F: 
+                FnMut($($param),+) +
+                FnMut($($param::Item<'a>),+),
             $($param: for<'a> SystemParam<Item<'a> = $param> + 'static),+
         {
-            fn run(&self, ecs: &ECS) {
+            type State = ($($param::State),+);
+            fn run(&self, ecs: &ECS, state: &mut Self::State) {
                 #[allow(clippy::too_many_arguments)]
                 fn call<$($param),+>(mut f: impl FnMut($($param),+), $($p:$param),+) {
                     f($($p),+);
                 }
-                $(let $p = $param::create(ecs);)+
-                if $($p.is_some())&&+ {
-                    unsafe {call(self, $($p.unwrap_unchecked()),+)};
-                }
+                $(let $p = $param::fetch(ecs, &mut state.$i);)+
+                call(self, $($p),+);
             }
             
             fn join_component_access(component_access: &mut Access) {
@@ -112,11 +169,19 @@ macro_rules! system_func_impl {
             fn join_resource_access(resource_access: &mut Access) {
                 $($param::join_resource_access(resource_access);)+
             }
+
+            fn name(&self) -> &'static str {
+                std::any::type_name::<F>()
+            }
+
+            fn init_state(ecs: &mut ECS) -> Self::State {
+                ($($param::init_state(ecs)),+)
+            }
         }
     }
 }
 
-variadics_please::all_tuples!{system_func_impl, 1, 32, In, p}
+variadics_please::all_tuples_enumerated!{system_func_impl, 2, 32, In, p}
 
 pub trait IntoSystem<In> {
     fn into_system(self) -> Box<dyn System + Send + Sync>;
@@ -129,6 +194,8 @@ impl<In: Send + Sync + 'static, T: Send + Sync + 'static> IntoSystem<In> for T w
         Self::join_component_access(&mut component_access);
         Self::join_resource_access(&mut resource_access);
         Box::new(FunctionSystem {
+            name: self.name(),
+            state: None,
             component_access,
             resource_access,
             signal_access: SignalAccess::default(),
@@ -145,6 +212,7 @@ pub(crate) enum SystemCommand {
     RemoveComponent(Box<dyn FnOnce(&mut ECS) + Send>),
 }
 
+#[derive(Clone)]
 pub struct Commands(std::sync::mpsc::Sender<SystemCommand>);
 
 impl Commands {
@@ -166,9 +234,14 @@ impl Commands {
 }
 
 impl SystemParam for Commands {
-    type Item<'a> = Commands;
-    fn create(ecs: &ECS) -> Option<Self::Item<'_>> {
-        Some(Self(ecs.system_command_sender.clone()))
+    type Item<'a> = Self;
+    type State = Self;
+    fn init_state(ecs: &mut ECS) -> Self::State {
+        Self(ecs.system_command_sender.clone())
+    }
+
+    fn fetch<'a>(_: &'a ECS, state: &'a mut Self::State) -> Self::Item<'a> {
+        state.clone()
     }
 }
 
@@ -181,15 +254,6 @@ macro_rules! system_input_impl {
     }
 }
 
+impl SystemInput for () {}
+
 variadics_please::all_tuples!{system_input_impl, 1, 32, In}
-
-pub trait ObserverInput {}
-
-macro_rules! observer_input_impl {
-    ($($param:ident),+) => {
-        #[allow(unused_parens)]
-        impl<$($param: ObserverParam),+> ObserverInput for ($($param),+) {}
-    }
-}
-
-variadics_please::all_tuples!{observer_input_impl, 1, 32, In}

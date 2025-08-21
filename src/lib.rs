@@ -10,14 +10,16 @@ mod sparse_set;
 mod schedule;
 mod signal;
 mod event;
-mod observer_manager;
+mod observer;
 
+use component_manager::ComponentId;
 pub use query::Query;
 pub use resource::{Res, ResMut};
-pub use derive::{Component, Resource};
+pub use derive::{Component, Resource, Event};
 pub use schedule::{Schedule, Schedules};
 pub use system::Commands;
 pub use signal::Signal;
+pub use event::{Event, EventReader, EventReadWriter, EventQueue};
 
 pub const MAX_ENTITIES: usize = 2_usize.pow(16)-1;
 pub const MAX_COMPONENTS: usize = 128;
@@ -58,10 +60,16 @@ impl std::fmt::Debug for Entity {
 pub trait Component: Send + Sync + 'static {}
 pub trait Resource: Send + Sync + 'static {}
 
+static ECS_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ECSId(pub(crate) usize);
+
 pub struct ECS {
+    id: ECSId,
     pub(crate) component_manager: component_manager::ComponentManager,
     pub(crate) entity_manager: entity_manager::EntityManager,
-    pub(crate) resource_manager: resource::ResourceManager,
+    pub(crate) resources: resource::Resources,
     pub(crate) thread_pool: rayon::ThreadPool,
     system_command_receiver: std::sync::mpsc::Receiver<system::SystemCommand>,
     pub(crate) system_command_sender: std::sync::mpsc::Sender<system::SystemCommand>,
@@ -81,9 +89,10 @@ impl ECS {
     pub fn new(num_threads: usize) -> Result<Self, rayon::ThreadPoolBuildError> {
         let (system_command_sender, system_command_receiver) = std::sync::mpsc::channel();
         let mut ecs = Self {
+            id: ECSId(ECS_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
             component_manager: Default::default(),
             entity_manager: Default::default(),
-            resource_manager: Default::default(),
+            resources: Default::default(),
             thread_pool: rayon::ThreadPoolBuilder::new().num_threads(num_threads).build()?,
             system_command_receiver,
             system_command_sender,
@@ -127,26 +136,41 @@ impl ECS {
     }
 
     pub fn run_schedule<L: schedule::ScheduleLabel>(&mut self, label: &L) {
-        let schedules = self.get_resource::<Schedules>().expect("Schedules not initialized");
-        let Some(schedule) = schedules.get(label) else { return; };
+        let mut schedules = unsafe { self.resources.get_mut_unsafe::<Schedules>().expect("Schedules not initialized") };
+        let Some(schedule) = schedules.get_mut(label) else { return; };
         schedule.execute(self);
         self.handle_commands();
     }
 
     pub fn insert_resource<R: Resource>(&mut self, resource: R) {
-        self.resource_manager.insert(resource);
+        self.resources.insert(resource);
     }
 
     pub fn remove_resource<R: Resource>(&mut self) -> Option<R> {
-        self.resource_manager.remove()
+        self.resources.remove()
     }
 
     pub fn get_resource<R: Resource>(&self) -> Option<Res<'_, R>> {
-        self.resource_manager.get::<R>()
+        self.resources.get::<R>()
     }
 
     pub fn get_mut_resource<R: Resource>(&mut self) -> Option<ResMut<'_, R>> {
-        self.resource_manager.get_mut::<R>()
+        self.resources.get_mut::<R>()
+    }
+
+    pub fn resource<R: Resource>(&self) -> Res<'_, R> {
+        self.resources.get()
+            .unwrap_or_else(|| panic!("resource '{}' not initialized", std::any::type_name::<R>()))
+    }
+
+    pub fn resource_mut<R: Resource>(&mut self) -> ResMut<'_, R> {
+        self.resources.get_mut()
+            .unwrap_or_else(|| panic!("resource '{}' not initialized", std::any::type_name::<R>()))
+    }
+
+    pub(crate) unsafe fn resource_mut_unsafe<R: Resource>(&self) -> ResMut<'_, R> {
+        unsafe { self.resources.get_mut_unsafe()
+                    .unwrap_or_else(|| panic!("resource '{}' not initialized", std::any::type_name::<R>())) }
     }
 
     pub fn insert_schedule<L: schedule::ScheduleLabel>(&mut self, label: L, schedule: Schedule) {
@@ -171,6 +195,14 @@ impl ECS {
                 },
             }
         }
+    }
+
+    pub fn register_component<C: Component>(&mut self) -> ComponentId {
+        self.component_manager.register_component::<C>()
+    }
+
+    pub fn send_signal<E: Event>(&mut self, event: E) {
+        todo!()
     }
 }
 

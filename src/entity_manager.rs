@@ -55,7 +55,7 @@ pub trait EntityBundle {
 impl<C: Component + 'static> EntityBundle for C {
     fn spawn(self, ecs: &mut ECS) -> Entity {
         let entity = ecs.entity_manager.spawn();
-        let signature = ecs.component_manager.register_component::<C>();
+        let signature = ecs.component_manager.register_component::<C>().as_signature();
         ecs.component_manager.spawn_entity(entity, signature);
         unsafe { ecs.component_manager.set_component_limited_checks(entity, self) };
         entity
@@ -68,7 +68,7 @@ macro_rules! bundle_typle_impl {
             fn spawn(self, ecs: &mut ECS) -> Entity {
                 let data = self;
                 let mut signature = Bitmap::new();
-                $(signature |= ecs.component_manager.register_component::<$name>();)+
+                $(signature |= ecs.component_manager.register_component::<$name>().as_signature();)+
                 let entity = ecs.entity_manager.spawn();
                 ecs.component_manager.spawn_entity(entity, signature);
                 unsafe {
