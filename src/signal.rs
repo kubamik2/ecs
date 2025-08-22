@@ -25,13 +25,13 @@ impl<E: Event> ObserverParam for Signal<'_, E> {
         signal_access.required.insert(TypeId::of::<E>());
     }
 
-    fn init_state(ecs: &mut crate::ECS) -> Self::State {
-        let signal_queue = ecs.resource::<SignalQueue<E>>();
+    fn init_state(world: &mut crate::World) -> Self::State {
+        let signal_queue = world.resource::<SignalQueue<E>>();
         signal_queue.current_event
     }
 
-    fn fetch<'a>(ecs: &'a crate::ECS, state: &'a mut Self::State) -> Self::Item<'a> {
-        let signal_queue = ecs.resource::<SignalQueue<E>>();
+    fn fetch<'a>(world: &'a crate::World, state: &'a mut Self::State) -> Self::Item<'a> {
+        let signal_queue = world.resource::<SignalQueue<E>>();
         Signal {
             event_index: *state,
             signal_queue,

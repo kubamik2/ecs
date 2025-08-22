@@ -22,15 +22,15 @@ pub struct ComponentRecord {
     id: ComponentId,
 }
 
-pub struct ComponentManager {
+pub struct Components {
     component_records: HashMap<TypeId, ComponentRecord>,
     components: [MaybeUninit<TypelessSparseSet>; MAX_COMPONENTS],
     groups: HashMap<Signature, SparseSet<Entity>>,
-    entity_signatures: HashMap<Entity, Signature>,
+    entity_signatures: SparseSet<Signature>,
     component_len: usize,
 }
 
-impl Default for ComponentManager {
+impl Default for Components {
     fn default() -> Self {
         Self {
             component_records: Default::default(),
@@ -42,7 +42,7 @@ impl Default for ComponentManager {
     }
 }
 
-impl ComponentManager {
+impl Components {
     pub(crate) fn register_component<C: Component>(&mut self) -> ComponentId {
         match self.component_records.entry(TypeId::of::<C>()) {
             Entry::Vacant(vacant) => {
@@ -62,16 +62,19 @@ impl ComponentManager {
         }
     }
 
+    // entity must be alive
     pub(crate) fn get_component<C: Component>(&self, entity: Entity) -> Option<&C> {
         let component_id = self.get_component_id::<C>()?;
-        unsafe { self.get_component_ptr_by_index::<C>(entity, component_id).map(|f| f.as_ref().unwrap_unchecked()) }
+        unsafe { self.get_component_by_id::<C>(entity, component_id).map(|f| f.as_ref().unwrap_unchecked()) }
     }
 
+    // entity must be alive
     pub(crate) fn get_mut_component<C: Component>(&mut self, entity: Entity) -> Option<&mut C> {
         let component_id = self.get_component_id::<C>()?;
-        unsafe { self.get_mut_component_ptr_by_index::<C>(entity, component_id).map(|f| f.as_mut().unwrap_unchecked()) }
+        unsafe { self.get_component_by_id::<C>(entity, component_id).map(|f| f.as_mut().unwrap_unchecked()) }
     }
 
+    // entity must be alive
     pub(crate) fn set_component<C: Component>(&mut self, entity: Entity, component: C) {
         let components_num = self.component_records.len();
         let component_record = self.component_records
@@ -84,7 +87,7 @@ impl ComponentManager {
                     id: ComponentId(components_num),
                 }
             });
-        let Some(entity_signature) = self.entity_signatures.get_mut(&entity) else { return; };
+        let Some(entity_signature) = self.entity_signatures.get_mut(entity.id()) else { return; };
 
         let component_signature = component_record.signature;
         let component_id = component_record.id;
@@ -93,17 +96,18 @@ impl ComponentManager {
 
         if (*entity_signature & component_signature).is_zero() {
             let group = self.groups.get_mut(entity_signature).expect("entity doesnt belong to any groups");
-            group.remove(entity);
+            group.remove(entity.id());
             entity_signature.bitor_assign(component_signature);
             let new_group = self.groups.entry(*entity_signature).or_default();
-            new_group.insert(entity, entity);
+            new_group.insert(entity.id(), entity);
         }
-        sparse_set.insert(entity, component);
+        sparse_set.insert(entity.id(), component);
     }
 
+    // entity must be alive
     pub(crate) fn remove_component<C: Component>(&mut self, entity: Entity) {
         let Some(component_record) = self.component_records.get(&TypeId::of::<C>()) else { return; };
-        let Some(entity_signature) = self.entity_signatures.get_mut(&entity) else { return; };
+        let Some(entity_signature) = self.entity_signatures.get_mut(entity.id()) else { return; };
 
         let component_signature = component_record.signature;
         let component_id = component_record.id;
@@ -113,37 +117,39 @@ impl ComponentManager {
             return;
         }
         let group = self.groups.get_mut(entity_signature).expect("entity doesnt belong to any groups");
-        group.remove(entity);
+        group.remove(entity.id());
         entity_signature.bitor_assign(component_signature);
         let new_group = self.groups.entry(*entity_signature).or_default();
-        new_group.insert(entity, entity);
+        new_group.insert(entity.id(), entity);
 
-        sparse_set.remove(entity);
+        sparse_set.remove(entity.id());
     }
 
-    pub(crate) fn spawn_entity(&mut self, entity: Entity, signature: Signature) {
-        assert!(self.entity_signatures.insert(entity, signature).is_none(), "component manager duplicate EntityId");
+    pub(crate) unsafe fn insert_empty_entity(&mut self, entity: Entity, signature: Signature) {
+        assert!(self.entity_signatures.insert(entity.id(), signature).is_none(), "component manager duplicate EntityId");
         let group = self.groups.entry(signature).or_default();
-        group.insert(entity, entity);
+        group.insert(entity.id(), entity);
     }
 
-    pub(crate) unsafe fn set_component_limited_checks<C: Component>(&mut self, entity: Entity, component: C) {
+    // entity must be alive
+    pub(crate) unsafe fn set_component_unchecked<C: Component>(&mut self, entity: Entity, component: C) {
         let component_record = unsafe { self.component_records.get(&TypeId::of::<C>()).unwrap_unchecked() };
         let component_id = component_record.id;
         let sparse_set = unsafe { self.components[component_id.0].assume_init_ref().downcast_unchecked::<C>().get().as_mut().unwrap_unchecked() };
-        sparse_set.insert(entity, component);
+        sparse_set.insert(entity.id(), component);
     }
 
+    // entity must be alive
     pub(crate) fn remove_entity(&mut self, entity: Entity) {
-        let Some(entity_signature) = self.entity_signatures.remove(&entity) else { return; };
+        let Some(entity_signature) = self.entity_signatures.remove(entity.id()) else { return; };
         let group = self.groups.get_mut(&entity_signature).expect("entity doesnt belong to any groups");
-        group.remove(entity);
+        group.remove(entity.id());
         
         let mut entity_signature_raw = *entity_signature;
         let mut index = 0;
         while entity_signature_raw > 0 {
             if (entity_signature_raw & 1) == 1 {
-                unsafe { self.components[index].assume_init_mut().remove(entity) };
+                unsafe { self.components[index].assume_init_mut().remove(entity.id()) };
             }
             entity_signature_raw >>= 1;
             index += 1;
@@ -159,24 +165,16 @@ impl ComponentManager {
         self.component_records.get(&TypeId::of::<C>()).map(|f| f.id)
     }
 
-    pub(crate) fn get_component_ptr_by_index<C: Component>(&self, entity: Entity, component_id: ComponentId) -> Option<*const C> {
+    // entity must be alive
+    pub(crate) unsafe fn get_component_by_id<C: Component>(&self, entity: Entity, component_id: ComponentId) -> Option<*mut C> {
         let sparse_set = unsafe { self.components[component_id.0].assume_init_ref().downcast_unchecked::<C>() };
-        unsafe { sparse_set.get().as_ref().unwrap_unchecked().get_ptr(entity) }
+        unsafe { sparse_set.get().as_mut().unwrap_unchecked().get_mut_ptr(entity.id()) }
     }
 
-    pub(crate) fn get_mut_component_ptr_by_index<C: Component>(&self, entity: Entity, component_id: ComponentId) -> Option<*mut C> {
+    // entity must be alive
+    pub(crate) unsafe fn get_component_by_id_unchecked<C: Component>(&self, entity: Entity, component_id: ComponentId) -> *mut C {
         let sparse_set = unsafe { self.components[component_id.0].assume_init_ref().downcast_unchecked::<C>() };
-        unsafe { sparse_set.get().as_mut().unwrap_unchecked().get_mut_ptr(entity) }
-    }
-
-    pub(crate) fn get_component_ptr_by_index_unchecked<C: Component>(&self, entity: Entity, component_id: ComponentId) -> *const C {
-        let sparse_set = unsafe { self.components[component_id.0].assume_init_ref().downcast_unchecked::<C>() };
-        unsafe { sparse_set.get().as_ref().unwrap_unchecked().get_ptr_unchecked(entity) }
-    }
-
-    pub(crate) fn get_mut_component_ptr_by_index_unchecked<C: Component>(&self, entity: Entity, component_id: ComponentId) -> *mut C {
-        let sparse_set = unsafe { self.components[component_id.0].assume_init_ref().downcast_unchecked::<C>() };
-        unsafe { sparse_set.get().as_mut().unwrap_unchecked().get_mut_ptr_unchecked(entity) }
+        unsafe { sparse_set.get().as_mut().unwrap_unchecked().get_mut_ptr_unchecked(entity.id()) }
     }
 
     #[inline]
@@ -184,7 +182,8 @@ impl ComponentManager {
         &self.groups
     }
 
-    pub(crate) fn get_entity_component_signature(&self, entity: Entity) -> Option<Signature> {
-        self.entity_signatures.get(&entity).copied()
+    // entity must be alive
+    pub(crate) fn get_entity_signature_by_type_id(&self, entity: Entity) -> Option<Signature> {
+        self.entity_signatures.get(entity.id()).copied()
     }
 }

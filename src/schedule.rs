@@ -1,10 +1,10 @@
 use std::{any::{Any, TypeId}, collections::HashMap, hash::Hash};
 
-use crate::{system::{IntoSystem, System, SystemInput, SystemValidationError}, ECSId, Resource, ECS};
+use crate::{system::{IntoSystem, System, SystemInput, SystemValidationError}, Resource, world::{World, WorldId}};
 
 #[derive(Default)]
 pub struct Schedule {
-    linked_ecs: Option<ECSId>,
+    linked_world: Option<WorldId>,
     systems: Vec<Box<dyn System + Send + Sync>>,
     parallel_exeuction_queue: Vec<Vec<usize>>,
     init_queue: Vec<usize>,
@@ -22,33 +22,33 @@ impl Schedule {
         Ok(())
     }
 
-    pub(crate) fn execute(&mut self, ecs: &ECS) {
+    pub(crate) fn execute(&mut self, world: &World) {
         for pack in &self.parallel_exeuction_queue {
             if pack.len() > Self::PARALLEL_EXECUTION_THRESHOLD {
-                ecs.thread_pool.in_place_scope(|scope| {
+                world.thread_pool.in_place_scope(|scope| {
                     self.systems.iter_mut().for_each(|system| {
                         scope.spawn(|_| {
-                            system.execute(ecs);
+                            system.execute(world);
                         });
                     });
                 });
             } else {
                 self.systems.iter_mut().for_each(|system| {
-                    system.execute(ecs);
+                    system.execute(world);
                 });
             }
         }
     }
 
-    pub fn run(&mut self, ecs: &mut ECS) {
-        if let Some(ecs_id) = self.linked_ecs {
-            assert!(ecs.id == ecs_id, "initialized schedule ran in a different ecs");
+    pub fn run(&mut self, world: &mut World) {
+        if let Some(world_id) = self.linked_world {
+            assert!(world.id() == world_id, "initialized schedule ran in a different world");
         }
         while let Some(i) = self.init_queue.pop() {
-            self.systems[i].init_state(ecs);
+            self.systems[i].init_state(world);
         }
-        self.execute(ecs);
-        ecs.handle_commands();
+        self.execute(world);
+        world.handle_commands();
     }
 
     fn update_parallel_execution_queue(&mut self) {

@@ -64,12 +64,12 @@ impl<E: Event> EventReader<'_, E> {
 impl<E: Event> SystemParam for EventReader<'_, E> {
     type Item<'a> = EventReader<'a, E>;
     type State = usize;
-    fn init_state(_: &mut crate::ECS) -> Self::State {
+    fn init_state(_: &mut crate::World) -> Self::State {
         0
     }
 
-    fn fetch<'a>(ecs: &'a crate::ECS, state: &'a mut usize) -> Self::Item<'a> {
-        let event_queue = ecs.resource::<EventQueue<E>>();
+    fn fetch<'a>(world: &'a crate::World, state: &'a mut usize) -> Self::Item<'a> {
+        let event_queue = world.resource::<EventQueue<E>>();
         EventReader {
             last_count: state,
             event_queue,
@@ -103,12 +103,12 @@ impl<E: Event> EventReadWriter<'_, E> {
 impl<E: Event> SystemParam for EventReadWriter<'_, E> {
     type Item<'a> = EventReadWriter<'a, E>;
     type State = usize;
-    fn init_state(_: &mut crate::ECS) -> Self::State {
+    fn init_state(_: &mut crate::World) -> Self::State {
         0
     }
 
-    fn fetch<'a>(ecs: &'a crate::ECS, state: &'a mut usize) -> Self::Item<'a> {
-        let event_queue = unsafe { ecs.resource_mut_unsafe::<EventQueue<E>>() };
+    fn fetch<'a>(world: &'a crate::World, state: &'a mut usize) -> Self::Item<'a> {
+        let event_queue = unsafe { world.resource_mut_unsafe::<EventQueue<E>>() };
         EventReadWriter {
             last_count: state,
             event_queue,

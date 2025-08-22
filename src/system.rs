@@ -1,14 +1,14 @@
-use crate::{access::SignalAccess, entity_manager::EntityBundle, param::SystemParam, Component, Entity};
+use crate::{access::SignalAccess, entity::EntityBundle, param::SystemParam, Component, Entity};
 
-use super::{access::Access, ECS};
+use super::{access::Access, World};
 
 pub trait System {
     fn name(&self) -> &'static str;
-    fn execute(&mut self, ecs: &ECS);
+    fn execute(&mut self, world: &World);
     fn component_access(&self) -> &Access;
     fn resource_access(&self) -> &Access;
     fn signal_access(&self) -> &SignalAccess;
-    fn init_state(&mut self, ecs: &mut ECS);
+    fn init_state(&mut self, world: &mut World);
     fn is_comp(&self, other_component_access: &Access, other_resource_access: &Access) -> bool {
         self.component_access().is_compatible(other_component_access) &&
         self.resource_access().is_compatible(other_resource_access)
@@ -50,10 +50,10 @@ pub struct FunctionSystem<In, F: SystemFunc<In>> {
 }
 
 impl<In, F: SystemFunc<In>> System for FunctionSystem<In, F> {
-    fn execute(&mut self, ecs: &ECS) {
+    fn execute(&mut self, world: &World) {
         let name = self.name;
         let state = self.state.as_mut().unwrap_or_else(|| panic!("system '{}' has been executed without initialization", name));
-        self.func.run(ecs, state);
+        self.func.run(world, state);
     }
 
     fn component_access(&self) -> &Access {
@@ -72,18 +72,18 @@ impl<In, F: SystemFunc<In>> System for FunctionSystem<In, F> {
         self.name
     }
 
-    fn init_state(&mut self, ecs: &mut ECS) {
-        self.state = Some(F::init_state(ecs));
+    fn init_state(&mut self, world: &mut World) {
+        self.state = Some(F::init_state(world));
     }
 }
 
 pub trait SystemFunc<In> {
     type State: Send + Sync;
     fn name(&self) -> &'static str;
-    fn run(&self, ecs: &ECS, state: &mut Self::State);
+    fn run(&self, world: &World, state: &mut Self::State);
     fn join_component_access(component_access: &mut Access);
     fn join_resource_access(resource_access: &mut Access);
-    fn init_state(ecs: &mut ECS) -> Self::State;
+    fn init_state(world: &mut World) -> Self::State;
 }
 
 impl<F> SystemFunc<()> for F where 
@@ -91,7 +91,7 @@ impl<F> SystemFunc<()> for F where
     for<'a> &'a F: FnMut()
 {
     type State = ();
-    fn run(&self, _: &ECS, _: &mut Self::State) {
+    fn run(&self, _: &World, _: &mut Self::State) {
         fn call(mut f: impl FnMut()) {
             f()
         }
@@ -106,7 +106,7 @@ impl<F> SystemFunc<()> for F where
         std::any::type_name::<F>()
     }
 
-    fn init_state(_: &mut ECS) -> Self::State {}
+    fn init_state(_: &mut World) -> Self::State {}
 }
 
 impl<F, In> SystemFunc<In> for F where 
@@ -117,11 +117,11 @@ impl<F, In> SystemFunc<In> for F where
     In: for<'a> SystemParam + 'static,
 {
     type State = In::State;
-    fn run(&self, ecs: &ECS, state: &mut Self::State) {
+    fn run(&self, world: &World, state: &mut Self::State) {
         fn call<In>(mut f: impl FnMut(In), p: In) {
             f(p)
         }
-        let p = In::fetch(ecs, state);
+        let p = In::fetch(world, state);
         call(self, p);
     }
 
@@ -137,8 +137,8 @@ impl<F, In> SystemFunc<In> for F where
         std::any::type_name::<F>()
     }
 
-    fn init_state(ecs: &mut ECS) -> Self::State {
-        In::init_state(ecs)
+    fn init_state(world: &mut World) -> Self::State {
+        In::init_state(world)
     }
 }
 
@@ -153,12 +153,12 @@ macro_rules! system_func_impl {
             $($param: for<'a> SystemParam<Item<'a> = $param> + 'static),+
         {
             type State = ($($param::State),+);
-            fn run(&self, ecs: &ECS, state: &mut Self::State) {
+            fn run(&self, world: &World, state: &mut Self::State) {
                 #[allow(clippy::too_many_arguments)]
                 fn call<$($param),+>(mut f: impl FnMut($($param),+), $($p:$param),+) {
                     f($($p),+);
                 }
-                $(let $p = $param::fetch(ecs, &mut state.$i);)+
+                $(let $p = $param::fetch(world, &mut state.$i);)+
                 call(self, $($p),+);
             }
             
@@ -174,8 +174,8 @@ macro_rules! system_func_impl {
                 std::any::type_name::<F>()
             }
 
-            fn init_state(ecs: &mut ECS) -> Self::State {
-                ($($param::init_state(ecs)),+)
+            fn init_state(world: &mut World) -> Self::State {
+                ($($param::init_state(world)),+)
             }
         }
     }
@@ -206,10 +206,10 @@ impl<In: Send + Sync + 'static, T: Send + Sync + 'static> IntoSystem<In> for T w
 }
 
 pub(crate) enum SystemCommand {
-    Spawn(Box<dyn FnOnce(&mut ECS) + Send>),
+    Spawn(Box<dyn FnOnce(&mut World) + Send>),
     Remove(Entity),
-    SetComponent(Box<dyn FnOnce(&mut ECS) + Send>),
-    RemoveComponent(Box<dyn FnOnce(&mut ECS) + Send>),
+    SetComponent(Box<dyn FnOnce(&mut World) + Send>),
+    RemoveComponent(Box<dyn FnOnce(&mut World) + Send>),
 }
 
 #[derive(Clone)]
@@ -217,7 +217,7 @@ pub struct Commands(std::sync::mpsc::Sender<SystemCommand>);
 
 impl Commands {
     pub fn spawn<B: EntityBundle + 'static + Send>(&self, bundle: B) {
-        self.0.send(SystemCommand::Spawn(Box::new(move |ecs| { bundle.spawn(ecs); }))).expect("Commands::spawn Sender error")
+        self.0.send(SystemCommand::Spawn(Box::new(move |world| { bundle.spawn(world); }))).expect("Commands::spawn Sender error")
     }
 
     pub fn remove(&self, entity: Entity) {
@@ -225,22 +225,22 @@ impl Commands {
     }
 
     pub fn set_component<C: Component>(&self, entity: Entity, component: C) {
-        self.0.send(SystemCommand::SetComponent(Box::new(move |ecs| ecs.set_component(entity, component)))).expect("Commands::set_component Sender error")
+        self.0.send(SystemCommand::SetComponent(Box::new(move |world| world.set_component(entity, component)))).expect("Commands::set_component Sender error")
     }
 
     pub fn remove_component<C: Component>(&self, entity: Entity) {
-        self.0.send(SystemCommand::RemoveComponent(Box::new(move |ecs| ecs.remove_component::<C>(entity)))).expect("Commands::remove_component Sender error")
+        self.0.send(SystemCommand::RemoveComponent(Box::new(move |world| world.remove_component::<C>(entity)))).expect("Commands::remove_component Sender error")
     }
 }
 
 impl SystemParam for Commands {
     type Item<'a> = Self;
     type State = Self;
-    fn init_state(ecs: &mut ECS) -> Self::State {
-        Self(ecs.system_command_sender.clone())
+    fn init_state(world: &mut World) -> Self::State {
+        Self(world.system_command_sender.clone())
     }
 
-    fn fetch<'a>(_: &'a ECS, state: &'a mut Self::State) -> Self::Item<'a> {
+    fn fetch<'a>(_: &'a World, state: &'a mut Self::State) -> Self::Item<'a> {
         state.clone()
     }
 }
