@@ -1,4 +1,4 @@
-#![feature(sync_unsafe_cell, downcast_unchecked)]
+#![feature(sync_unsafe_cell, downcast_unchecked, allocator_api, alloc_layout_extra)]
 mod bitmap;
 mod component;
 mod entity;
@@ -7,13 +7,13 @@ mod query;
 mod param;
 mod access;
 mod resource;
-mod sparse_set;
 mod schedule;
 mod signal;
 mod event;
 mod observer;
 mod world;
 mod tests;
+mod storage;
 
 pub use component::{ComponentId, Signature};
 pub use world::World;
@@ -26,7 +26,7 @@ pub use signal::Signal;
 pub use event::{Event, EventReader, EventReadWriter, EventQueue};
 pub use entity::Entity;
 
-pub const MAX_ENTITIES: usize = sparse_set::SPARSE_SET_CAPACITY;
+pub const MAX_ENTITIES: usize = u16::MAX as usize;
 pub const MAX_COMPONENTS: usize = 128;
 
 

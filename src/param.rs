@@ -1,4 +1,6 @@
-use crate::access::SignalAccess;
+use std::any::TypeId;
+
+use crate::world::WorldPtr;
 
 use super::{access::Access, World};
 
@@ -8,39 +10,12 @@ pub trait SystemParam {
     type State: Send + Sync;
     fn join_component_access(component_access: &mut Access) {}
     fn join_resource_access(resource_access: &mut Access) {}
+    fn join_signal_access(signal_access: &mut Option<TypeId>) {}
     fn init_state(world: &mut World) -> Self::State;
-    fn fetch<'a>(world: &'a World, state: &'a mut Self::State) -> Self::Item<'a>;
+    /// This function will run in parallel
+    /// # Safety
+    /// The caller must not modify the world such that it would cause a data race
+    unsafe fn fetch<'a>(world_ptr: WorldPtr<'a>, state: &'a mut Self::State) -> Self::Item<'a>;
+    fn after(world: &mut World, state: &mut Self::State) {}
 }
 
-
-#[allow(unused_variables)]
-pub trait ObserverParam {
-    type Item<'a>;
-    type State: Send + Sync;
-    fn join_component_access(component_access: &mut Access) {}
-    fn join_resource_access(resource_access: &mut Access) {}
-    fn join_signal_access(signal_access: &mut SignalAccess) {}
-    fn init_state(world: &mut World) -> Self::State;
-    fn fetch<'a>(world: &'a World, state: &'a mut Self::State) -> Self::Item<'a>;
-}
-
-impl<T: SystemParam> ObserverParam for T {
-    type Item<'a> = T::Item<'a>;
-    type State = T::State;
-
-    fn fetch<'a>(world: &'a World, state: &'a mut Self::State) -> Self::Item<'a> {
-        T::fetch(world, state)
-    }
-
-    fn init_state(world: &mut World) -> Self::State {
-        T::init_state(world)
-    }
-
-    fn join_component_access(component_access: &mut Access) {
-        T::join_component_access(component_access);
-    }
-
-    fn join_resource_access(resource_access: &mut Access) {
-        T::join_resource_access(resource_access)
-    }
-}

@@ -1,39 +1,29 @@
-use crate::{ComponentId, Signature, param::SystemParam};
+use crate::{param::SystemParam, world::WorldPtr, ComponentId, Signature};
 use super::{access::Access, bitmap::Bitmap, Component, Entity, World};
-use std::{any::TypeId, collections::HashSet, mem::MaybeUninit, ptr::NonNull};
+use std::{any::TypeId, collections::HashSet, mem::MaybeUninit};
 
 const QUERY_MAX_VARIADIC_COUNT: usize = 32;
 
-pub struct Query<D: QueryData> {
+pub struct Query<'a, D: QueryData> {
     _a: std::marker::PhantomData<D>,
-    world: SyncPointer<World>,
+    world_ptr: WorldPtr<'a>,
     component_signature: Signature,
     cached_component_ids: [ComponentId; QUERY_MAX_VARIADIC_COUNT],
 }
 
-impl<D: QueryData> Clone for Query<D> {
+impl<D: QueryData> Clone for Query<'_, D> {
     fn clone(&self) -> Self {
         Self {
             _a: Default::default(),
-            world: self.world.clone(),
+            world_ptr: self.world_ptr,
             component_signature: self.component_signature,
             cached_component_ids: self.cached_component_ids,
         }
     }
 }
 
-struct SyncPointer<T>(NonNull<T>);
-unsafe impl<T> Sync for SyncPointer<T> {}
-unsafe impl<T> Send for SyncPointer<T> {}
-
-impl<T> Clone for SyncPointer<T> {
-    fn clone(&self) -> Self {
-        Self(self.0)
-    }
-}
-
-impl<D: QueryData> Query<D> {
-    pub fn new(world: &mut World) -> Self {
+impl<'a, D: QueryData> Query<'a, D> {
+    pub fn new(world: &'a mut World) -> Self {
         D::register_components(world);
         let mut component_signature = Bitmap::new();
         let mut component_signature_map = HashSet::new();
@@ -45,16 +35,16 @@ impl<D: QueryData> Query<D> {
         let cached_component_ids = D::cache_component_ids(world);
         Self {
             _a: std::marker::PhantomData,
-            world: SyncPointer(NonNull::from(world)),
+            world_ptr: world.world_ptr_mut(),
             component_signature,
             cached_component_ids,
         }
     }
 
-    pub fn iter<'a>(&self) -> impl Iterator<Item = D::ItemRef<'a>> {
-        let world = unsafe { self.world.0.as_ref() };
+    pub fn iter(&self) -> impl Iterator<Item = D::ItemRef<'a>> {
         let queue_signature = self.component_signature;
-        world
+        let world_ptr = self.world_ptr;
+        unsafe { world_ptr.as_world() }
             .groups()
             .iter()
             .filter(move |(signature, _)| {
@@ -62,13 +52,12 @@ impl<D: QueryData> Query<D> {
                 signature & queue_signature == queue_signature
             })
             .flat_map(|(_, entities)| entities.iter().copied())
-            .map(|entity| unsafe { D::fetch_ref(world, entity, &self.cached_component_ids) })
+            .map(|entity| unsafe { D::fetch_ref(self.world_ptr, entity, &self.cached_component_ids) })
     }
 
-    pub fn iter_mut<'a>(&mut self) -> impl Iterator<Item = D::ItemMut<'a>> {
-        let world = unsafe { self.world.0.as_ref() };
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = D::ItemMut<'a>> {
         let queue_signature = self.component_signature;
-        world
+        unsafe { self.world_ptr.as_world() }
             .groups()
             .iter()
             .filter(move |(signature, _)| {
@@ -76,15 +65,14 @@ impl<D: QueryData> Query<D> {
                 signature & queue_signature == queue_signature
             })
             .flat_map(|(_, entities)| entities.iter().copied())
-            .map(|entity| unsafe { D::fetch_mut(world, entity, &self.cached_component_ids) })
+            .map(|entity| unsafe { D::fetch_mut(self.world_ptr, entity, &self.cached_component_ids) })
     }
 
     /// # Safety
     /// can violate rust's reference rules
-    pub unsafe fn iter_unsafe<'a>(&self) -> impl Iterator<Item = D::ItemMut<'a>> {
-        let world = unsafe { self.world.0.as_ref() };
+    pub unsafe fn iter_unsafe(&self) -> impl Iterator<Item = D::ItemMut<'a>> {
         let queue_signature = self.component_signature;
-        world
+        unsafe { self.world_ptr.as_world() }
             .groups()
             .iter()
             .filter(move |(signature, _)| {
@@ -92,62 +80,65 @@ impl<D: QueryData> Query<D> {
                 signature & queue_signature == queue_signature
             })
             .flat_map(|(_, entities)| entities.iter().copied())
-            .map(|entity| unsafe { D::fetch_mut(world, entity, &self.cached_component_ids) })
+            .map(|entity| unsafe { D::fetch_mut(self.world_ptr, entity, &self.cached_component_ids) })
     }
 
     pub fn get(&self, entity: Entity) -> Option<D::ItemRef<'_>> {
-        let world = unsafe { self.world.0.as_ref() };
-        let entity_signature = world.get_entity_signature(entity)?;
+        let entity_signature = unsafe { self.world_ptr.as_world() }.get_entity_signature(entity)?;
         if (entity_signature & self.component_signature) != self.component_signature {
             return None;
         }
-        Some(unsafe { D::fetch_ref(world, entity, &self.cached_component_ids) })
+        Some(unsafe { D::fetch_ref(self.world_ptr, entity, &self.cached_component_ids) })
     }
 
     pub fn get_mut(&mut self, entity: Entity) -> Option<D::ItemMut<'_>> {
-        let world = unsafe { self.world.0.as_ref() };
-        let entity_signature = world.get_entity_signature(entity)?;
+        let entity_signature = unsafe { self.world_ptr.as_world() }.get_entity_signature(entity)?;
         if (entity_signature & self.component_signature) != self.component_signature {
             return None;
         }
-        Some(unsafe { D::fetch_mut(world, entity, &self.cached_component_ids) })
+        Some(unsafe { D::fetch_mut(self.world_ptr, entity, &self.cached_component_ids) })
     }
 
     /// # Safety
     ///
     /// Might violate rust's reference rules
     pub unsafe fn get_unsafe(&self, entity: Entity) -> Option<D::ItemMut<'_>> {
-        let world = unsafe { self.world.0.as_ref() };
-        let entity_signature = world.get_entity_signature(entity)?;
+        let entity_signature = unsafe { self.world_ptr.as_world() }.get_entity_signature(entity)?;
         if (entity_signature & self.component_signature) != self.component_signature {
             return None;
         }
-        Some(unsafe { D::fetch_mut(world, entity, &self.cached_component_ids) })
+        Some(unsafe { D::fetch_mut(self.world_ptr, entity, &self.cached_component_ids) })
     }
 }
 
-impl<D: QueryData> SystemParam for Query<D> {
-    type Item<'a> = Self;
-    type State = Self;
+impl<D: QueryData> SystemParam for Query<'_, D> {
+    type Item<'a> = Query<'a, D>;
+    type State = (Signature, [ComponentId; QUERY_MAX_VARIADIC_COUNT]);
 
     fn join_component_access(component_access: &mut Access) {
         D::join_component_access(component_access);
     }
 
     fn init_state(world: &mut World) -> Self::State {
-        Query::new(world)
+        let query = Query::<D>::new(world);
+        (query.component_signature, query.cached_component_ids)
     }
 
-    fn fetch<'a>(_: &'a World, state: &'a mut Self::State) -> Self::Item<'a> {
-        state.clone()
+    unsafe fn fetch<'a>(world_ptr: WorldPtr<'a>, state: &'a mut Self::State) -> Self::Item<'a> {
+        Query {
+            _a: Default::default(),
+            cached_component_ids: state.1,
+            component_signature: state.0,
+            world_ptr,
+        }
     }
 }
 
 pub trait QueryItem: Send + Sync {
     type ItemRef<'a>;
     type ItemMut<'a>;
-    unsafe fn fetch_ref<'a>(world: &World, entity: Entity, component_index: ComponentId) -> Self::ItemRef<'a>;
-    unsafe fn fetch_mut<'a>(world: &World, entity: Entity, component_index: ComponentId) -> Self::ItemMut<'a>;
+    unsafe fn fetch_ref(world_ptr: WorldPtr<'_>, entity: Entity, component_index: ComponentId) -> Self::ItemRef<'_>;
+    unsafe fn fetch_mut(world_ptr: WorldPtr<'_>, entity: Entity, component_index: ComponentId) -> Self::ItemMut<'_>;
     fn component_id_or_init(world: &mut World) -> ComponentId;
     fn component_id(_: &World) -> ComponentId;
     fn join_component_signature(_: &mut HashSet<TypeId>) {}
@@ -159,13 +150,13 @@ impl<C: Component> QueryItem for &C {
     type ItemRef<'a> = &'a C;
     type ItemMut<'a> = &'a C;
     #[inline]
-    unsafe fn fetch_ref<'a>(world: &World, entity: Entity, component_id: ComponentId) -> Self::ItemRef<'a> {
-        unsafe { world.get_component_by_id_unchecked::<C>(entity, component_id).as_ref().unwrap_unchecked() }
+    unsafe fn fetch_ref(world_ptr: WorldPtr<'_>, entity: Entity, component_id: ComponentId) -> Self::ItemRef<'_> {
+        unsafe { world_ptr.as_world().get_component_by_id_unchecked::<C>(entity, component_id) }
     }
 
     #[inline]
-    unsafe fn fetch_mut<'a>(world: &World, entity: Entity, component_id: ComponentId) -> Self::ItemMut<'a> {
-        unsafe { world.get_component_by_id_unchecked::<C>(entity, component_id).as_ref().unwrap_unchecked() }
+    unsafe fn fetch_mut(world_ptr: WorldPtr<'_>, entity: Entity, component_id: ComponentId) -> Self::ItemMut<'_> {
+        unsafe { world_ptr.as_world().get_component_by_id_unchecked::<C>(entity, component_id) }
     }
 
     fn component_id_or_init(world: &mut World) -> ComponentId {
@@ -197,13 +188,13 @@ impl<C: Component> QueryItem for &mut C {
     type ItemRef<'a> = &'a C;
     type ItemMut<'a> = &'a mut C;
     #[inline]
-    unsafe fn fetch_ref<'a>(world: &World, entity: Entity, component_index: ComponentId) -> Self::ItemRef<'a> {
-        unsafe { world.get_component_by_id_unchecked::<C>(entity, component_index).as_ref().unwrap_unchecked() }
+    unsafe fn fetch_ref(world_ptr: WorldPtr<'_>, entity: Entity, component_index: ComponentId) -> Self::ItemRef<'_> {
+        unsafe { world_ptr.as_world().get_component_by_id_unchecked::<C>(entity, component_index) }
     }
 
     #[inline]
-    unsafe fn fetch_mut<'a>(world: &World, entity: Entity, component_index: ComponentId) -> Self::ItemMut<'a> {
-        unsafe { world.get_component_by_id_unchecked::<C>(entity, component_index).as_mut().unwrap_unchecked() }
+    unsafe fn fetch_mut(mut world_ptr: WorldPtr<'_>, entity: Entity, component_index: ComponentId) -> Self::ItemMut<'_> {
+        unsafe { world_ptr.as_world_mut().get_mut_component_by_id_unchecked::<C>(entity, component_index) }
     }
 
     fn component_id_or_init(world: &mut World) -> ComponentId {
@@ -237,12 +228,12 @@ impl QueryItem for Entity {
     type ItemMut<'a> = Entity;
 
     #[inline]
-    unsafe fn fetch_ref<'a>(_: &World, entity: Entity, _: ComponentId) -> Self::ItemRef<'a> {
+    unsafe fn fetch_ref(_: WorldPtr<'_>, entity: Entity, _: ComponentId) -> Self::ItemRef<'_> {
         entity
     }
 
     #[inline]
-    unsafe fn fetch_mut<'a>(_: &World, entity: Entity, _: ComponentId) -> Self::ItemMut<'a> {
+    unsafe fn fetch_mut(_: WorldPtr<'_>, entity: Entity, _: ComponentId) -> Self::ItemMut<'_> {
         entity
     }
 
@@ -259,13 +250,13 @@ impl<C: Component> QueryItem for Option<&C> {
     type ItemRef<'a> = Option<&'a C>;
     type ItemMut<'a> = Option<&'a C>;
     #[inline]
-    unsafe fn fetch_ref<'a>(world: &World, entity: Entity, component_index: ComponentId) -> Self::ItemRef<'a> {
-        unsafe { world.get_component_by_id::<C>(entity, component_index).map(|f| f.as_ref().unwrap_unchecked()) }
+    unsafe fn fetch_ref(world_ptr: WorldPtr<'_>, entity: Entity, component_index: ComponentId) -> Self::ItemRef<'_> {
+        unsafe { world_ptr.as_world().get_component_by_id::<C>(entity, component_index) }
     }
 
     #[inline]
-    unsafe fn fetch_mut<'a>(world: &World, entity: Entity, component_index: ComponentId) -> Self::ItemMut<'a> {
-        unsafe { world.get_component_by_id::<C>(entity, component_index).map(|f| f.as_ref().unwrap_unchecked()) }
+    unsafe fn fetch_mut(world_ptr: WorldPtr<'_>, entity: Entity, component_index: ComponentId) -> Self::ItemMut<'_> {
+        unsafe { world_ptr.as_world().get_component_by_id::<C>(entity, component_index) }
     }
 
     fn component_id_or_init(world: &mut World) -> ComponentId {
@@ -292,13 +283,13 @@ impl<C: Component> QueryItem for Option<&mut C> {
     type ItemRef<'a> = Option<&'a C>;
     type ItemMut<'a> = Option<&'a mut C>;
     #[inline]
-    unsafe fn fetch_ref<'a>(world: &World, entity: Entity, component_index: ComponentId) -> Self::ItemRef<'a> {
-        unsafe { world.get_component_by_id::<C>(entity, component_index).map(|f| f.as_ref().unwrap_unchecked()) }
+    unsafe fn fetch_ref(world_ptr: WorldPtr<'_>, entity: Entity, component_index: ComponentId) -> Self::ItemRef<'_> {
+        unsafe { world_ptr.as_world().get_component_by_id::<C>(entity, component_index) }
     }
 
     #[inline]
-    unsafe fn fetch_mut<'a>(world: &World, entity: Entity, component_index: ComponentId) -> Self::ItemMut<'a> {
-        unsafe { world.get_component_by_id::<C>(entity, component_index).map(|f| f.as_mut().unwrap_unchecked()) }
+    unsafe fn fetch_mut(mut world_ptr: WorldPtr<'_>, entity: Entity, component_index: ComponentId) -> Self::ItemMut<'_> {
+        unsafe { world_ptr.as_world_mut().get_mut_component_by_id::<C>(entity, component_index) }
     }
 
     fn component_id_or_init(world: &mut World) -> ComponentId {
@@ -324,8 +315,8 @@ impl<C: Component> QueryItem for Option<&mut C> {
 pub trait QueryData: Sync + Send {
     type ItemRef<'a>;
     type ItemMut<'a>;
-    unsafe fn fetch_ref<'a>(world: &World, entity: Entity, component_indices: &[ComponentId; QUERY_MAX_VARIADIC_COUNT]) -> Self::ItemRef<'a>;
-    unsafe fn fetch_mut<'a>(world: &World, entity: Entity, component_indices: &[ComponentId; QUERY_MAX_VARIADIC_COUNT]) -> Self::ItemMut<'a>;
+    unsafe fn fetch_ref<'a>(world_ptr: WorldPtr<'a>, entity: Entity, component_indices: &[ComponentId; QUERY_MAX_VARIADIC_COUNT]) -> Self::ItemRef<'a>;
+    unsafe fn fetch_mut<'a>(world_ptr: WorldPtr<'a>, entity: Entity, component_indices: &[ComponentId; QUERY_MAX_VARIADIC_COUNT]) -> Self::ItemMut<'a>;
     fn join_component_signature(component_signature: &mut HashSet<TypeId>);
     fn join_required_component_signature(component_signature: &mut HashSet<TypeId>);
     fn join_component_access(component_access: &mut Access);
@@ -341,13 +332,13 @@ macro_rules! query_tuple_impl {
             type ItemMut<'a> = ($($name::ItemMut<'a>),+);
 
             #[inline(always)]
-            unsafe fn fetch_ref<'a>(world: &World, entity: Entity, component_indices: &[ComponentId; QUERY_MAX_VARIADIC_COUNT]) -> Self::ItemRef<'a> {
-                unsafe { ($($name::fetch_ref(world, entity, component_indices[$i])),+) }
+            unsafe fn fetch_ref<'a>(world_ptr: WorldPtr<'a>, entity: Entity, component_indices: &[ComponentId; QUERY_MAX_VARIADIC_COUNT]) -> Self::ItemRef<'a> {
+                unsafe { ($($name::fetch_ref(world_ptr, entity, component_indices[$i])),+) }
             }
 
             #[inline(always)]
-            unsafe fn fetch_mut<'a>(world: &World, entity: Entity, component_indices: &[ComponentId; QUERY_MAX_VARIADIC_COUNT]) -> Self::ItemMut<'a> {
-                unsafe { ($($name::fetch_mut(world, entity, component_indices[$i])),+) }
+            unsafe fn fetch_mut<'a>(world_ptr: WorldPtr<'a>, entity: Entity, component_indices: &[ComponentId; QUERY_MAX_VARIADIC_COUNT]) -> Self::ItemMut<'a> {
+                unsafe { ($($name::fetch_mut(world_ptr, entity, component_indices[$i])),+) }
             }
 
             #[inline]

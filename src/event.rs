@@ -1,5 +1,9 @@
 use std::any::TypeId;
-use crate::{param::SystemParam, Res, ResMut, Resource};
+use crate::{param::SystemParam, world::WorldPtr, Res, ResMut, Resource};
+
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct EventId(u16);
 
 pub trait Event: Send + Clone + Sync + 'static {}
 
@@ -68,8 +72,8 @@ impl<E: Event> SystemParam for EventReader<'_, E> {
         0
     }
 
-    fn fetch<'a>(world: &'a crate::World, state: &'a mut usize) -> Self::Item<'a> {
-        let event_queue = world.resource::<EventQueue<E>>();
+    unsafe fn fetch<'a>(world_ptr: WorldPtr<'a>, state: &'a mut usize) -> Self::Item<'a> {
+        let event_queue = unsafe { world_ptr.as_world() }.resource::<EventQueue<E>>();
         EventReader {
             last_count: state,
             event_queue,
@@ -107,8 +111,8 @@ impl<E: Event> SystemParam for EventReadWriter<'_, E> {
         0
     }
 
-    fn fetch<'a>(world: &'a crate::World, state: &'a mut usize) -> Self::Item<'a> {
-        let event_queue = unsafe { world.resource_mut_unsafe::<EventQueue<E>>() };
+    unsafe fn fetch<'a>(mut world_ptr: WorldPtr<'a>, state: &'a mut usize) -> Self::Item<'a> {
+        let event_queue = unsafe { world_ptr.as_world_mut() }.resource_mut::<EventQueue<E>>();
         EventReadWriter {
             last_count: state,
             event_queue,

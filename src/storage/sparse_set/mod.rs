@@ -1,8 +1,9 @@
+pub mod blob_sparse_set;
 use std::{any::Any, cell::SyncUnsafeCell, slice::Iter};
 
 pub struct TypelessSparseSet {
     sparse_set: Box<dyn Any>,
-    remove_ptr: fn(&mut Box<dyn Any>, u16),
+    remove_ptr: fn(&mut Box<dyn Any>, usize),
 }
 
 impl TypelessSparseSet {
@@ -20,17 +21,17 @@ impl TypelessSparseSet {
     }
 
     #[inline]
-    pub fn remove(&mut self, id: u16) {
+    pub fn remove(&mut self, id: usize) {
         (self.remove_ptr)(&mut self.sparse_set, id);
     }
 }
 
-pub const SPARSE_SET_CAPACITY: usize = SparseIndex::MAX as usize;
+pub const SPARSE_SET_CAPACITY: usize = SparseIndex::MAX;
 
 pub struct SparseSet<T> {
     sparse_array: SparseArray,
     dense: Vec<T>,
-    mapping: Vec<u16>,
+    mapping: Vec<usize>,
 }
 
 impl<T> Default for SparseSet<T> {
@@ -59,61 +60,61 @@ impl<T> SparseSet<T> {
     }
 
     #[inline]
-    pub fn contains(&self, id: u16) -> bool {
+    pub fn contains(&self, id: usize) -> bool {
         let sparse_index = self.sparse_array.get(id);
         sparse_index.is_some()
     }
 
     #[inline]
-    pub fn get(&self, id: u16) -> Option<&T> {
+    pub fn get(&self, id: usize) -> Option<&T> {
         let sparse_index = self.sparse_array.get(id);
         let index = sparse_index.get()?;
-        Some(&self.dense[index as usize])
+        Some(&self.dense[index])
     }
 
     #[inline]
-    pub fn get_mut(&mut self, id: u16) -> Option<&mut T> {
+    pub fn get_mut(&mut self, id: usize) -> Option<&mut T> {
         let sparse_index = self.sparse_array.get(id);
         let index = sparse_index.get()?;
-        Some(&mut self.dense[index as usize])
+        Some(&mut self.dense[index])
     }
 
     #[inline]
-    pub fn get_ptr_unchecked(&self, id: u16) -> *const T {
+    pub fn ptr(&self, id: usize) -> *const T {
         let sparse_index = self.sparse_array.get(id);
-        let index = sparse_index.0 as usize;
+        let index = sparse_index.0;
         &self.dense[index]
     }
 
     #[inline]
-    pub fn get_mut_ptr_unchecked(&mut self, id: u16) -> *mut T {
+    pub fn ptr_mut(&mut self, id: usize) -> *mut T {
         let sparse_index = self.sparse_array.get(id);
-        let index = sparse_index.0 as usize;
+        let index = sparse_index.0;
         &mut self.dense[index]
     }
 
     #[inline]
-    pub fn get_ptr(&self, id: u16) -> Option<*const T> {
+    pub fn get_ptr(&self, id: usize) -> Option<*const T> {
         let sparse_index = self.sparse_array.get(id);
         let index = sparse_index.get()?;
-        Some(&self.dense[index as usize])
+        Some(&self.dense[index])
     }
 
     #[inline]
-    pub fn get_mut_ptr(&mut self, id: u16) -> Option<*mut T> {
+    pub fn get_mut_ptr(&mut self, id: usize) -> Option<*mut T> {
         let sparse_index = self.sparse_array.get(id);
         let index = sparse_index.get()?;
-        Some(&mut self.dense[index as usize])
+        Some(&mut self.dense[index])
     }
 
     #[inline]
-    pub fn insert(&mut self, id: u16, mut value: T) -> Option<T> {
+    pub fn insert(&mut self, id: usize, mut value: T) -> Option<T> {
         let sparse_index = self.sparse_array.get(id);
         if let Some(index) = sparse_index.get() {
-            std::mem::swap(&mut value, &mut self.dense[index as usize]);
+            std::mem::swap(&mut value, &mut self.dense[index]);
             Some(value)
         } else {
-            self.sparse_array.set(id, SparseIndex::new(self.dense.len() as u16));
+            self.sparse_array.set(id, SparseIndex::new(self.dense.len()));
             self.dense.push(value);
             self.mapping.push(id);
             None
@@ -121,13 +122,13 @@ impl<T> SparseSet<T> {
     }
 
     #[inline]
-    fn insert_with_index(&mut self, id: u16, value: T) -> u16 {
+    fn insert_with_index(&mut self, id: usize, value: T) -> usize {
         let sparse_index = self.sparse_array.get(id);
         if let Some(index) = sparse_index.get() {
-            self.dense[index as usize] = value;
+            self.dense[index] = value;
             index
         } else {
-            let index = self.dense.len() as u16;
+            let index = self.dense.len();
             self.sparse_array.set(id, SparseIndex::new(index));
             self.dense.push(value);
             self.mapping.push(id);
@@ -136,14 +137,14 @@ impl<T> SparseSet<T> {
     }
 
     #[inline]
-    pub fn remove(&mut self, id: u16) -> Option<T> {
+    pub fn remove(&mut self, id: usize) -> Option<T> {
         let sparse_index = self.sparse_array.get(id);
         let index = sparse_index.get()?;
 
         let dense_len = self.dense.len();
         let back = self.mapping[dense_len-1];
-        self.dense.swap(index as usize, dense_len-1);
-        self.mapping.swap(index as usize, dense_len-1);
+        self.dense.swap(index, dense_len-1);
+        self.mapping.swap(index, dense_len-1);
 
         self.sparse_array.set(back, sparse_index);
         self.sparse_array.set(id, SparseIndex::NONE);
@@ -153,11 +154,11 @@ impl<T> SparseSet<T> {
     }
 
     #[inline]
-    unsafe fn remove_by_index_unchecked(&mut self, id: u16, index: u16) -> T {
+    unsafe fn remove_by_index_unchecked(&mut self, id: usize, index: usize) -> T {
         let dense_len = self.dense.len();
         let back = self.mapping[dense_len-1];
-        self.dense.swap(index as usize, dense_len-1);
-        self.mapping.swap(index as usize, dense_len-1);
+        self.dense.swap(index, dense_len-1);
+        self.mapping.swap(index, dense_len-1);
 
         self.sparse_array.set(back, SparseIndex(index));
         self.sparse_array.set(id, SparseIndex::NONE);
@@ -167,7 +168,7 @@ impl<T> SparseSet<T> {
     }
 
     #[inline]
-    pub fn entry(&mut self, id: u16) -> Entry<'_, T> {
+    pub fn entry(&mut self, id: usize) -> Entry<'_, T> {
         match self.sparse_array.get(id) {
             SparseIndex::NONE => Entry::Vacant(VacantEntry {
                 sparse_set: self,
@@ -180,6 +181,18 @@ impl<T> SparseSet<T> {
             }),
         }
     }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.sparse_array.clear();
+        self.mapping.clear();
+        self.dense.clear();
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.dense.len()
+    }
 }
 
 #[derive(Default)]
@@ -187,23 +200,31 @@ pub struct SparseArray(Vec<SparseIndex>);
 
 impl SparseArray {
     #[inline]
-    pub fn get(&self, id: u16) -> SparseIndex {
-        let id = id as usize;
+    pub const fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    #[inline]
+    pub fn get(&self, id: usize) -> SparseIndex {
         self.0.get(id).copied().unwrap_or(SparseIndex::NONE)
     }
 
     #[inline]
-    pub fn set(&mut self, id: u16, index: SparseIndex) {
-        let id = id as usize;
+    pub fn set(&mut self, id: usize, index: SparseIndex) {
         if id >= self.0.len() {
             self.0.resize(id+1, SparseIndex::NONE);
         }
         self.0[id] = index;
     }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct SparseIndex(u16);
+pub struct SparseIndex(usize);
 
 impl std::fmt::Debug for SparseIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -217,26 +238,26 @@ impl std::fmt::Debug for SparseIndex {
 
 #[allow(unused)]
 impl SparseIndex {
-    pub const NONE: Self = Self(u16::MAX);
-    pub const MAX: u16 = u16::MAX - 1;
+    pub const NONE: Self = Self(usize::MAX);
+    pub const MAX: usize = usize::MAX - 1;
 
     #[inline]
-    const fn new(index: u16) -> Self {
+    const fn new(index: usize) -> Self {
         Self(index)
     }
 
     #[inline]
     const fn is_some(&self) -> bool {
-        self.0 != u16::MAX
+        self.0 != usize::MAX
     }
     
     #[inline]
     const fn is_none(&self) -> bool {
-        self.0 == u16::MAX
+        self.0 == usize::MAX
     }
 
     #[inline]
-    const fn get(&self) -> Option<u16> {
+    const fn get(&self) -> Option<usize> {
         if self.is_some() {
             Some(self.0)
         } else {
@@ -245,12 +266,12 @@ impl SparseIndex {
     }
 
     #[inline]
-    const fn set(&mut self, index: u16) {
+    const fn set(&mut self, index: usize) {
         self.0 = index;
     }
 
     #[inline]
-    const unsafe fn get_unsafe(&self) -> u16 {
+    const unsafe fn get_unsafe(&self) -> usize {
         self.0
     }
 }
@@ -282,7 +303,7 @@ impl<'a, V> Entry<'a, V> {
         }
     }
 
-    pub fn id(&self) -> u16 {
+    pub fn id(&self) -> usize {
         match self {
             Entry::Occupied(entry) => entry.id,
             Entry::Vacant(entry) => entry.id,
@@ -303,7 +324,7 @@ impl<'a, V> Entry<'a, V> {
         }
     }
 
-    pub fn or_insert_with_id<F: FnOnce(u16) -> V>(self, default: F) -> &'a mut V {
+    pub fn or_insert_with_id<F: FnOnce(usize) -> V>(self, default: F) -> &'a mut V {
         match self {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {
@@ -325,29 +346,29 @@ impl<'a, V: Default> Entry<'a, V> {
 
 pub struct OccupiedEntry<'a, T> {
     sparse_set: &'a mut SparseSet<T>,
-    index: u16,
-    id: u16,
+    index: usize,
+    id: usize,
 }
 
 impl<'a, V> OccupiedEntry<'a, V> {
     pub fn get(&self) -> &V {
-        &self.sparse_set.dense[self.index as usize]
+        &self.sparse_set.dense[self.index]
     }
 
     pub fn get_mut(&mut self) -> &mut V {
-        &mut self.sparse_set.dense[self.index as usize]
+        &mut self.sparse_set.dense[self.index]
     }
 
     pub fn insert(&mut self, mut value: V) -> V {
-        std::mem::swap(&mut value, &mut self.sparse_set.dense[self.index as usize]);
+        std::mem::swap(&mut value, &mut self.sparse_set.dense[self.index]);
         value
     }
 
     pub fn into_mut(self) -> &'a mut V {
-        &mut self.sparse_set.dense[self.index as usize]
+        &mut self.sparse_set.dense[self.index]
     }
 
-    pub fn id(&self) -> u16 {
+    pub fn id(&self) -> usize {
         self.id
     }
 
@@ -358,13 +379,13 @@ impl<'a, V> OccupiedEntry<'a, V> {
 
 pub struct VacantEntry<'a, V> {
     sparse_set: &'a mut SparseSet<V>,
-    id: u16,
+    id: usize,
 }
 
 impl<'a, V> VacantEntry<'a, V> {
     pub fn insert(self, value: V) -> &'a mut V {
         let index = self.sparse_set.insert_with_index(self.id, value);
-        &mut self.sparse_set.dense[index as usize]
+        &mut self.sparse_set.dense[index]
     }
 
     pub fn insert_entry(self, value: V) -> OccupiedEntry<'a, V> {
@@ -376,7 +397,7 @@ impl<'a, V> VacantEntry<'a, V> {
         }
     }
 
-    pub fn id(&self) -> u16 {
+    pub fn id(&self) -> usize {
         self.id
     }
 }
