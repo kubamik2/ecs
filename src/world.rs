@@ -1,6 +1,6 @@
 use std::{any::TypeId, marker::PhantomData, ptr::{self, NonNull}};
 
-use crate::{observer::{ObserverInput, SignalInput, Observers}, resource::ResourceId, signal::SignalQueue, system::{IntoSystem, System, SystemValidationError}, *};
+use crate::{observer::{ObserverInput, SignalInput, Observers}, resource::ResourceId, system::{IntoSystem, System, SystemValidationError}, *};
 
 static WORLD_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -21,6 +21,7 @@ impl Default for World {
         Self::new(Self::DEFAULT_THREAD_COUND).unwrap()
     }
 }
+
 unsafe impl Sync for World {}
 unsafe impl Send for World {}
 
@@ -259,18 +260,9 @@ impl World {
     
 
     pub fn send_signal<E: Event>(&mut self, event: E, target: Option<Entity>) {
-        if self.get_resource::<SignalQueue<E>>().is_none() {
-            self.insert_resource(SignalQueue::<E>::default());
-            self.observers.clear_signal_queues.push(|world| {
-                let mut signal_queue = world.resource_mut::<SignalQueue<E>>();
-                signal_queue.clear();
-            });
-        }
-        let mut signal_queue = self.resource_mut::<SignalQueue<E>>();
-        signal_queue.send(event, target);
-        let len = signal_queue.len();
-        self.observers.send_signal::<E>(len-1);
-        self.run_observers();
+        dbg!("sent");
+        let mut world_ptr = self.world_ptr_mut();
+        unsafe { world_ptr.as_world_mut() }.observers.send_signal(event, target, world_ptr);
     }
 
     // ===== Observers =====
@@ -282,13 +274,6 @@ impl World {
         system.validate()?;
         self.observers.add_boxed_observer(system);
         Ok(())
-    }
-
-    pub fn run_observers(&mut self) {
-        while self.observers.is_pending() {
-            let mut world_ptr = self.world_ptr_mut();
-            unsafe { world_ptr.as_world_mut().observers.execute_queried_systems(world_ptr) };
-        }
     }
 }
 

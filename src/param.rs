@@ -18,4 +18,3 @@ pub trait SystemParam {
     unsafe fn fetch<'a>(world_ptr: WorldPtr<'a>, state: &'a mut Self::State) -> Self::Item<'a>;
     fn after(world: &mut World, state: &mut Self::State) {}
 }
-

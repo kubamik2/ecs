@@ -1,6 +1,6 @@
 use std::any::TypeId;
 
-use crate::{entity::EntityBundle, param::SystemParam, world::WorldPtr, Component, Entity};
+use crate::{entity::EntityBundle, param::SystemParam, world::WorldPtr, Component, Entity, Event};
 
 use super::{access::Access, World};
 
@@ -12,10 +12,6 @@ pub trait System {
     fn resource_access(&self) -> &Access;
     fn signal_access(&self) -> Option<&TypeId>;
     fn init_state(&mut self, world: &mut World);
-    fn is_comp(&self, other_component_access: &Access, other_resource_access: &Access) -> bool {
-        self.component_access().is_compatible(other_component_access) &&
-        self.resource_access().is_compatible(other_resource_access)
-    }
     fn validate(&self) -> Result<(), SystemValidationError> {
         let component_access = self.component_access();
         let resource_access = self.resource_access();
@@ -267,6 +263,11 @@ enum CommandMeta {
     RemoveComponent {
         f: fn(&mut World, Entity),
         entity: Entity,
+    },
+    SendSignal {
+        f: fn(&mut World, *mut u8, Option<Entity>),
+        target: Option<Entity>,
+        data_size: usize,
     }
 }
 
@@ -345,6 +346,27 @@ impl Commands<'_> {
         self.copy_data(&command_meta, index);
     }
 
+    pub fn send_signal<E: Event>(&mut self, event: E, target: Option<Entity>) {
+        let additional = size_of::<CommandMeta>() + size_of::<E>();
+        let index = self.queue.len();
+        self.queue.resize(self.queue.len() + additional, 0);
+
+        let command_meta = CommandMeta::SendSignal {
+            f: |world, data, target| {
+                let data = data as *mut E;
+                let event = unsafe { data.read_unaligned() };
+                world.send_signal(event, target);
+            },
+            target,
+            data_size: size_of::<E>(),
+        };
+
+        self.copy_data(&command_meta, index);
+        self.copy_data(&event, index + size_of::<CommandMeta>());
+
+        std::mem::forget(event);
+    }
+
     unsafe fn read_command_meta(&self, index: usize) -> CommandMeta {
         use std::ptr::NonNull;
         let ptr = NonNull::from(&self.queue[index]).cast::<CommandMeta>();
@@ -375,6 +397,11 @@ impl Commands<'_> {
                 CommandMeta::RemoveComponent { f, entity } => {
                     (f)(world, entity);
                 },
+                CommandMeta::SendSignal { f, target, data_size } => {
+                    let ptr = unsafe { (&mut self.queue[0] as *mut u8).add(cursor) };
+                    (f)(world, ptr, target);
+                    cursor += data_size;
+                }
             }
         }
         self.queue.clear();

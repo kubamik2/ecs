@@ -152,4 +152,3 @@ impl<'a, E: Event> Iterator for EventIterator<'a, E> {
         self.iter.next().inspect(|_| *self.last_count += 1)
     }
 }
-
