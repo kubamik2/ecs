@@ -1,6 +1,6 @@
 use std::{any::TypeId, marker::PhantomData, ptr::{self, NonNull}};
 
-use crate::{observer::{ObserverInput, SignalInput, Observers}, resource::ResourceId, system::{IntoSystem, System, SystemValidationError}, *};
+use crate::{observer::{ObserverInput, Observers, SignalInput}, resource::ResourceId, system::{IntoSystem, System, SystemId, SystemValidationError}, *};
 
 static WORLD_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -14,6 +14,7 @@ pub struct World {
     resources: resource::Resources,
     observers: Observers,
     pub(crate) thread_pool: rayon::ThreadPool,
+    pub(crate) marked_sytems_for_removal: Vec<SystemId>,
 }
 
 impl Default for World {
@@ -35,6 +36,7 @@ impl World {
             resources: Default::default(),
             observers: Default::default(),
             thread_pool: rayon::ThreadPoolBuilder::new().num_threads(num_threads).build()?,
+            marked_sytems_for_removal: Default::default(),
         };
 
         world.insert_resource(schedule::Schedules::default());
@@ -70,12 +72,16 @@ impl World {
         let mut world_ptr = self.world_ptr_mut();
         let mut schedules = unsafe { world_ptr.as_world_mut() }.resource_mut::<Schedules>();
         let Some(schedule) = schedules.get_mut(label) else { return; };
-        schedule.execute(world_ptr);
+        schedule.run(unsafe { world_ptr.as_world_mut() });
     }
 
     pub fn insert_schedule<L: schedule::ScheduleLabel>(&mut self, label: L, schedule: Schedule) {
         let mut schedules = self.resource_mut::<Schedules>();
         schedules.insert(label, schedule);
+    }
+
+    pub fn queue_system_removal(&mut self, system_id: SystemId) {
+        self.marked_sytems_for_removal.push(system_id);
     }
 
 
@@ -226,7 +232,12 @@ impl World {
     pub fn get_component_id<C: Component>(&self) -> Option<ComponentId> {
         self.components.get_component_id::<C>()
     }
-    
+
+    pub fn component_id<C: Component>(&self) -> ComponentId {
+        self.components.get_component_id::<C>()
+            .unwrap_or_else(|| panic!("component '{}' not identified", std::any::type_name::<C>()))
+    }
+
 
     // ===== Entities =====
 
@@ -259,8 +270,13 @@ impl World {
     // ===== Signals =====
     
 
+    pub(crate) fn send_signal_from_system<E: Event>(&mut self, event: E, target: Option<Entity>) {
+        let mut world_ptr = self.world_ptr_mut();
+        unsafe { world_ptr.as_world_mut() }.observers.send_signal(event, target, world_ptr);
+    }
+
     pub fn send_signal<E: Event>(&mut self, event: E, target: Option<Entity>) {
-        dbg!("sent");
+        self.remove_dead_observers();
         let mut world_ptr = self.world_ptr_mut();
         unsafe { world_ptr.as_world_mut() }.observers.send_signal(event, target, world_ptr);
     }
@@ -270,10 +286,14 @@ impl World {
 
     pub fn add_observer<ParamIn: ObserverInput, S: IntoSystem<ParamIn, SignalInput> + 'static>(&mut self, system: S) -> Result<(), SystemValidationError> {
         let mut system: Box<dyn System<Input = SignalInput> + Send + Sync> = Box::new(system.into_system());
-        system.init_state(self);
-        system.validate()?;
+        system.init(self);
         self.observers.add_boxed_observer(system);
         Ok(())
+    }
+
+    #[inline]
+    pub(crate) fn remove_dead_observers(&mut self) {
+        self.observers.remove_dead_observers();
     }
 }
 

@@ -36,3 +36,15 @@ pub fn event_derive_macro(item: TokenStream) -> TokenStream {
         impl #impl_generics Event for #ident #ty_generics #where_clause {}
     }.into()
 }
+
+#[proc_macro_derive(ScheduleLabel)]
+pub fn schedule_label_derive_macro(item: TokenStream) -> TokenStream {
+    let ast: DeriveInput = syn::parse(item).unwrap();
+    let ident = &ast.ident;
+    let generics = &ast.generics;
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
+    quote::quote! {
+        impl #impl_generics ScheduleLabel for #ident #ty_generics #where_clause {}
+    }.into()
+}

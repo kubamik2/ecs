@@ -1,5 +1,7 @@
 use crate::bitmap::Bitmap;
-use super::{Component, World, MAX_ENTITIES};
+use super::{Component, World};
+
+pub const MAX_ENTITIES: usize = u16::MAX as usize;
 
 #[derive(Hash, Clone, Copy, PartialEq, Eq)]
 pub struct Entity {
@@ -51,6 +53,15 @@ impl Default for Entities {
 }
 
 impl Entities {
+    #[inline]
+    pub const fn new() -> Self {
+        Self {
+            list: Vec::new(),
+            next: Entity::new(0, 0),
+            available: 0,
+        }
+    }
+
     pub fn remove(&mut self, mut entity: Entity) {
         self.available += 1;
         self.list[entity.id() as usize] = self.next;

@@ -4,6 +4,8 @@ use crate::{bitmap::Bitmap, storage::sparse_set::{blob_sparse_set::BlobSparseSet
 
 pub type Signature = Bitmap;
 
+pub const MAX_COMPONENTS: usize = Bitmap::WIDTH;
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ComponentId(usize);
 
@@ -32,6 +34,7 @@ pub struct Components {
 }
 
 impl Components {
+    /// Register component if absent
     pub(crate) fn register_component<C: Component>(&mut self) -> ComponentId {
         match self.component_records.entry(TypeId::of::<C>()) {
             Entry::Vacant(vacant) => {
@@ -42,6 +45,7 @@ impl Components {
                     id,
                 });
                 self.components.push(BlobSparseSet::new::<C>());
+                assert!(self.component_len <= MAX_COMPONENTS, "component overflow");
                 self.component_len += 1;
                 id
             },
@@ -51,19 +55,19 @@ impl Components {
         }
     }
 
-    // entity must be alive
+    /// Entity must be alive
     pub(crate) fn get_component<C: Component>(&self, entity: Entity) -> Option<&C> {
         let component_id = self.get_component_id::<C>()?;
         unsafe { self.get_component_by_id::<C>(entity, component_id) }
     }
 
-    // entity must be alive
+    /// Entity must be alive
     pub(crate) fn get_mut_component<C: Component>(&mut self, entity: Entity) -> Option<&mut C> {
         let component_id = self.get_component_id::<C>()?;
         unsafe { self.get_mut_component_by_id::<C>(entity, component_id) }
     }
 
-    // entity must be alive
+    /// Entity must be alive
     pub(crate) fn set_component<C: Component>(&mut self, entity: Entity, component: C) {
         let components_num = self.component_records.len();
         let component_record = self.component_records
@@ -71,6 +75,7 @@ impl Components {
             .or_insert_with(|| {
                 self.components.push(BlobSparseSet::new::<C>());
                 self.component_len += 1;
+                assert!(self.component_len <= MAX_COMPONENTS, "component overflow");
                 ComponentRecord {
                     signature: Bitmap::new().with_set(components_num),
                     id: ComponentId(components_num),
@@ -93,7 +98,7 @@ impl Components {
         unsafe { sparse_set.insert(entity.id() as usize, component) };
     }
 
-    // entity must be alive
+    /// Entity must be alive
     pub(crate) fn remove_component<C: Component>(&mut self, entity: Entity) {
         let Some(component_record) = self.component_records.get(&TypeId::of::<C>()) else { return; };
         let Some(entity_signature) = self.entity_signatures.get_mut(entity.id() as usize) else { return; };
@@ -120,7 +125,7 @@ impl Components {
         group.insert(entity.id() as usize, entity);
     }
 
-    // entity must be alive
+    /// Entity must be alive
     pub(crate) unsafe fn set_component_unchecked<C: Component>(&mut self, entity: Entity, component: C) {
         let component_record = unsafe { self.component_records.get(&TypeId::of::<C>()).unwrap_unchecked() };
         let component_id = component_record.id;
@@ -128,7 +133,7 @@ impl Components {
         unsafe { sparse_set.insert(entity.id() as usize, component) };
     }
 
-    // entity must be alive
+    /// Entity must be alive
     pub(crate) fn remove_entity(&mut self, entity: Entity) {
         let Some(entity_signature) = self.entity_signatures.remove(entity.id() as usize) else { return; };
         let group = self.groups.get_mut(&entity_signature).expect("entity doesnt belong to any groups");
@@ -155,32 +160,32 @@ impl Components {
     }
 
     /// # Safety
-    /// entity must be alive
-    /// component_id must correspond to a component array of type C
+    /// Entity must be alive
+    /// Component_id must correspond to a component array of type C
     pub(crate) unsafe fn get_component_by_id<C: Component>(&self, entity: Entity, component_id: ComponentId) -> Option<&C> {
         let sparse_set = &self.components[component_id.0];
         unsafe { sparse_set.get(entity.id() as usize) }
     }
 
     /// # Safety
-    /// entity must be alive
-    /// component_id must correspond to a component array of type C
+    /// Entity must be alive
+    /// Component_id must correspond to a component array of type C
     pub(crate) unsafe fn get_component_by_id_unchecked<C: Component>(&self, entity: Entity, component_id: ComponentId) -> &C {
         let sparse_set = &self.components[component_id.0];
         unsafe { sparse_set.get(entity.id() as usize).unwrap() }
     }
 
     /// # Safety
-    /// entity must be alive
-    /// component_id must correspond to a component array of type C
+    /// Entity must be alive
+    /// Component_id must correspond to a component array of type C
     pub(crate) unsafe fn get_mut_component_by_id<C: Component>(&mut self, entity: Entity, component_id: ComponentId) -> Option<&mut C> {
         let sparse_set = &mut self.components[component_id.0];
         unsafe { sparse_set.get_mut(entity.id() as usize) }
     }
 
     /// # Safety
-    /// entity must be alive
-    /// component_id must correspond to a component array of type C
+    /// Entity must be alive
+    /// Component_id must correspond to a component array of type C
     pub(crate) unsafe fn get_mut_component_by_id_unchecked<C: Component>(&mut self, entity: Entity, component_id: ComponentId) -> &mut C {
         let sparse_set = &mut self.components[component_id.0];
         unsafe { sparse_set.get_mut(entity.id() as usize).unwrap() }
@@ -191,7 +196,7 @@ impl Components {
         &self.groups
     }
 
-    // entity must be alive
+    /// Entity must be alive
     pub(crate) fn get_entity_signature_by_type_id(&self, entity: Entity) -> Option<Signature> {
         self.entity_signatures.get(entity.id() as usize).copied()
     }

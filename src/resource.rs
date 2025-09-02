@@ -1,6 +1,6 @@
 use std::{any::{Any, TypeId}, cell::SyncUnsafeCell, collections::HashMap, ops::{Deref, DerefMut}};
 
-use crate::{storage::sparse_set::SparseSet, world::WorldPtr};
+use crate::{storage::sparse_set::SparseSet, system::SystemHandle, world::WorldPtr};
 
 use super::{access::Access, param::SystemParam, Resource, World};
 
@@ -158,15 +158,15 @@ impl<R: Resource + Send + Sync + 'static> SystemParam for Res<'_, R> {
     type Item<'b> = Res<'b, R>;
     type State = ResourceId;
 
-    fn join_resource_access(resource_access: &mut Access) {
-        resource_access.immutable.insert(TypeId::of::<R>());
+    fn join_resource_access(world: &mut World, resource_access: &mut Access) {
+        resource_access.immutable.set(world.resource_id::<R>().get());
     }
 
     fn init_state(world: &mut World) -> Self::State {
         world.resource_id::<R>()
     }
 
-    unsafe fn fetch<'a>(world_ptr: WorldPtr<'a>, state: &'a mut Self::State) -> Self::Item<'a> {
+    unsafe fn fetch<'a>(world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: &SystemHandle) -> Self::Item<'a> {
         unsafe { world_ptr.as_world().resource_by_id::<R>(*state) }
     }
 }
@@ -175,8 +175,8 @@ impl<R: Resource + Send + Sync + 'static> SystemParam for ResMut<'_, R> {
     type Item<'b> = ResMut<'b, R>;
     type State = ResourceId;
 
-    fn join_resource_access(resource_access: &mut Access) {
-        resource_access.mutable.insert(TypeId::of::<R>());
+    fn join_resource_access(world: &mut World, resource_access: &mut Access) {
+        resource_access.mutable.set(world.resource_id::<R>().get());
         resource_access.mutable_count += 1;
     }
 
@@ -184,7 +184,7 @@ impl<R: Resource + Send + Sync + 'static> SystemParam for ResMut<'_, R> {
         world.resource_id::<R>()
     }
 
-    unsafe fn fetch<'a>(mut world_ptr: WorldPtr<'a>, state: &'a mut Self::State) -> Self::Item<'a> {
+    unsafe fn fetch<'a>(mut world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: &SystemHandle) -> Self::Item<'a> {
         unsafe { world_ptr.as_world_mut().resource_mut_by_id(*state) }
     }
 }

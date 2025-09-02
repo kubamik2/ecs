@@ -1,4 +1,4 @@
-use crate::{param::SystemParam, world::WorldPtr, ComponentId, Signature};
+use crate::{param::SystemParam, system::SystemHandle, world::WorldPtr, ComponentId, Signature};
 use super::{access::Access, bitmap::Bitmap, Component, Entity, World};
 use std::{any::TypeId, collections::HashSet, mem::MaybeUninit};
 
@@ -115,8 +115,8 @@ impl<D: QueryData> SystemParam for Query<'_, D> {
     type Item<'a> = Query<'a, D>;
     type State = (Signature, [ComponentId; QUERY_MAX_VARIADIC_COUNT]);
 
-    fn join_component_access(component_access: &mut Access) {
-        D::join_component_access(component_access);
+    fn join_component_access(world: &mut World, component_access: &mut Access) {
+        D::join_component_access(world, component_access);
     }
 
     fn init_state(world: &mut World) -> Self::State {
@@ -124,7 +124,7 @@ impl<D: QueryData> SystemParam for Query<'_, D> {
         (query.component_signature, query.cached_component_ids)
     }
 
-    unsafe fn fetch<'a>(world_ptr: WorldPtr<'a>, state: &'a mut Self::State) -> Self::Item<'a> {
+    unsafe fn fetch<'a>(world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: &SystemHandle) -> Self::Item<'a> {
         Query {
             _a: Default::default(),
             cached_component_ids: state.1,
@@ -142,7 +142,7 @@ pub trait QueryItem: Send + Sync {
     fn component_id_or_init(world: &mut World) -> ComponentId;
     fn component_id(_: &World) -> ComponentId;
     fn join_component_signature(_: &mut HashSet<TypeId>) {}
-    fn join_component_access(_: &mut Access) {}
+    fn join_component_access(_: &mut World, _: &mut Access) {}
     fn join_required_component_signature(_: &mut HashSet<TypeId>) {}
 }
 
@@ -179,8 +179,8 @@ impl<C: Component> QueryItem for &C {
     }
 
     #[inline]
-    fn join_component_access(component_access: &mut Access) {
-        component_access.immutable.insert(TypeId::of::<C>());
+    fn join_component_access(world: &mut World, component_access: &mut Access) {
+        component_access.immutable.set(world.register_component::<C>().id());
     }
 }
 
@@ -217,8 +217,8 @@ impl<C: Component> QueryItem for &mut C {
     }
 
     #[inline]
-    fn join_component_access(component_access: &mut Access) {
-        component_access.mutable.insert(TypeId::of::<C>());
+    fn join_component_access(world: &mut World, component_access: &mut Access) {
+        component_access.mutable.set(world.register_component::<C>().id());
         component_access.mutable_count += 1;
     }
 }
@@ -274,8 +274,8 @@ impl<C: Component> QueryItem for Option<&C> {
     }
 
     #[inline]
-    fn join_component_access(component_access: &mut Access) {
-        component_access.immutable.insert(TypeId::of::<C>());
+    fn join_component_access(world: &mut World, component_access: &mut Access) {
+        component_access.immutable.set(world.register_component::<C>().id())
     }
 }
 
@@ -307,8 +307,9 @@ impl<C: Component> QueryItem for Option<&mut C> {
     }
 
     #[inline]
-    fn join_component_access(component_access: &mut Access) {
-        component_access.immutable.insert(TypeId::of::<C>());
+    fn join_component_access(world: &mut World, component_access: &mut Access) {
+        component_access.mutable.set(world.register_component::<C>().id());
+        component_access.mutable_count += 1;
     }
 }
 
@@ -319,7 +320,7 @@ pub trait QueryData: Sync + Send {
     unsafe fn fetch_mut<'a>(world_ptr: WorldPtr<'a>, entity: Entity, component_indices: &[ComponentId; QUERY_MAX_VARIADIC_COUNT]) -> Self::ItemMut<'a>;
     fn join_component_signature(component_signature: &mut HashSet<TypeId>);
     fn join_required_component_signature(component_signature: &mut HashSet<TypeId>);
-    fn join_component_access(component_access: &mut Access);
+    fn join_component_access(world: &mut World, component_access: &mut Access);
     fn register_components(world: &mut World);
     fn cache_component_ids(world: &World) -> [ComponentId; QUERY_MAX_VARIADIC_COUNT];
 }
@@ -352,8 +353,8 @@ macro_rules! query_tuple_impl {
             }
             
             #[inline]
-            fn join_component_access(component_access: &mut Access) {
-                $($name::join_component_access(component_access);)+
+            fn join_component_access(world: &mut World, component_access: &mut Access) {
+                $($name::join_component_access(world, component_access);)+
             }
 
             fn cache_component_ids(world: &World) -> [ComponentId; QUERY_MAX_VARIADIC_COUNT] {

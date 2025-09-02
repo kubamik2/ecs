@@ -1,11 +1,10 @@
-use std::any::TypeId;
-use crate::{param::SystemParam, world::WorldPtr, Res, ResMut, Resource};
+use crate::{param::SystemParam, system::SystemHandle, world::WorldPtr, Res, ResMut, Resource, World};
 
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct EventId(u16);
 
-pub trait Event: Send + Clone + Sync + 'static {}
+pub trait Event: Send + Sync + 'static {}
 
 pub struct EventQueue<E: Event> {
     old: Vec<E>,
@@ -72,7 +71,7 @@ impl<E: Event> SystemParam for EventReader<'_, E> {
         0
     }
 
-    unsafe fn fetch<'a>(world_ptr: WorldPtr<'a>, state: &'a mut usize) -> Self::Item<'a> {
+    unsafe fn fetch<'a>(world_ptr: WorldPtr<'a>, state: &'a mut usize, _: &SystemHandle) -> Self::Item<'a> {
         let event_queue = unsafe { world_ptr.as_world() }.resource::<EventQueue<E>>();
         EventReader {
             last_count: state,
@@ -80,8 +79,8 @@ impl<E: Event> SystemParam for EventReader<'_, E> {
         }
     }
 
-    fn join_resource_access(resource_access: &mut crate::access::Access) {
-        resource_access.immutable.insert(TypeId::of::<EventQueue<E>>());
+    fn join_resource_access(world: &mut World, resource_access: &mut crate::access::Access) {
+        resource_access.immutable.set(world.resource_id::<EventQueue<E>>().get()) ;
     }
 }
 
@@ -111,7 +110,7 @@ impl<E: Event> SystemParam for EventReadWriter<'_, E> {
         0
     }
 
-    unsafe fn fetch<'a>(mut world_ptr: WorldPtr<'a>, state: &'a mut usize) -> Self::Item<'a> {
+    unsafe fn fetch<'a>(mut world_ptr: WorldPtr<'a>, state: &'a mut usize, _: &SystemHandle) -> Self::Item<'a> {
         let event_queue = unsafe { world_ptr.as_world_mut() }.resource_mut::<EventQueue<E>>();
         EventReadWriter {
             last_count: state,
@@ -119,8 +118,8 @@ impl<E: Event> SystemParam for EventReadWriter<'_, E> {
         }
     }
 
-    fn join_resource_access(resource_access: &mut crate::access::Access) {
-        resource_access.mutable.insert(TypeId::of::<EventQueue<E>>());
+    fn join_resource_access(world: &mut World, resource_access: &mut crate::access::Access) {
+        resource_access.mutable.set(world.resource_id::<EventQueue<E>>().get());
         resource_access.mutable_count += 1;
     }
 }

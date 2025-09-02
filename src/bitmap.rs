@@ -1,7 +1,5 @@
 use std::{fmt::{Debug, Display}, ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Deref}};
 
-use super::MAX_COMPONENTS;
-
 type StorageType = u128;
 
 #[derive(Default, Copy, Clone, Hash, PartialEq, Eq)]
@@ -9,6 +7,7 @@ pub struct Bitmap(StorageType);
 
 #[allow(unused)]
 impl Bitmap {
+    pub const WIDTH: usize = 128;
     #[inline]
     pub const fn new() -> Self {
         Self(0)
@@ -16,27 +15,27 @@ impl Bitmap {
 
     #[inline]
     pub const fn with_set(self, index: usize) -> Self {
-        assert!(index < MAX_COMPONENTS);
+        assert!(index < Self::WIDTH);
         Self(self.0 | (1 << index))
     }
 
     #[inline]
     pub const fn get(&self, index: usize) -> bool {
-        assert!(index < MAX_COMPONENTS);
+        assert!(index < Self::WIDTH);
         let mask: StorageType = 1 << index;
         (self.0 & mask) > 0
     }
 
     #[inline]
     pub const fn set(&mut self, index: usize) {
-        assert!(index < MAX_COMPONENTS);
+        assert!(index < Self::WIDTH);
         let mask: StorageType = 1 << index;
         self.0 |= mask;
     }
 
     #[inline]
     pub const fn unset(&mut self, index: usize) {
-        assert!(index < MAX_COMPONENTS);
+        assert!(index < Self::WIDTH);
         let mask: StorageType = 1 << index;
         self.0 &= !mask;
     }
