@@ -62,7 +62,7 @@ impl Schedule {
                 unsafe { world_ptr.as_world() }.thread_pool.in_place_scope(|scope| {
                     for mut system_ptr in bucket.systems.iter().copied() {
                         let system = unsafe { system_ptr.as_mut() };
-                        scope.spawn(|_| {
+                        scope.spawn(move |_| {
                             system.execute(world_ptr, ());
                         });
                     }
@@ -76,10 +76,6 @@ impl Schedule {
         }
 
         let world = unsafe { world_ptr.as_world_mut() };
-        for SystemRecord { system, bucket_index: _ } in self.system_records.iter_mut() {
-            system.after(world);
-        }
-
         for SystemRecord { system, bucket_index: _ } in self.system_records.iter_mut() {
             system.after(world);
         }

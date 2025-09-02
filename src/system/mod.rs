@@ -87,20 +87,24 @@ impl<Input, ParamIn, F: SystemFunc<ParamIn, Input>> System for FunctionSystem<Pa
         self.func.run(world_ptr, state, input, &system_meta);
     }
 
+    #[inline]
     fn component_access(&self) -> &Access {
         let name = self.name;
         self.component_access.as_ref().unwrap_or_else(|| panic!("system '{}' has not been initialized", name))
     }
 
+    #[inline]
     fn resource_access(&self) -> &Access {
         let name = self.name;
         self.component_access.as_ref().unwrap_or_else(|| panic!("system '{}' has not been initialized", name))
     }
 
+    #[inline]
     fn signal_access(&self) -> Option<&TypeId> {
         self.signal_access.as_ref()
     }
 
+    #[inline]
     fn name(&self) -> &'static str {
         self.name
     }

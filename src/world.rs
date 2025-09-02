@@ -35,7 +35,7 @@ impl World {
             entity_manager: Default::default(),
             resources: Default::default(),
             observers: Default::default(),
-            thread_pool: rayon::ThreadPoolBuilder::new().num_threads(num_threads).build()?,
+            thread_pool: rayon::ThreadPoolBuilder::new().use_current_thread().num_threads(num_threads).build()?,
             marked_sytems_for_removal: Default::default(),
         };
 
