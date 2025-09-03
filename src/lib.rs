@@ -21,10 +21,11 @@ pub use query::Query;
 pub use resource::{Res, ResMut, ResourceId};
 pub use derive::{Component, Resource, Event, ScheduleLabel};
 pub use schedule::{Schedule, ScheduleLabel};
-pub use system::{Commands, SystemHandle};
+pub use system::{Commands, SystemHandle, SystemValidationError, SystemInput, IntoSystem, SystemId};
 pub use signal::Signal;
 pub use event::{Event, EventReader, EventReadWriter, EventQueue};
 pub use entity::{Entity, EntityBundle};
+pub use observer::ObserverInput;
 
 pub trait Component: Send + Sync + 'static {}
 pub trait Resource: Send + Sync + 'static {}

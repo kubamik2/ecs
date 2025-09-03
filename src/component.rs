@@ -136,7 +136,7 @@ impl Components {
     }
 
     /// Entity must be alive
-    pub(crate) fn remove_entity(&mut self, entity: Entity) {
+    pub(crate) fn despawn(&mut self, entity: Entity) {
         let Some(entity_signature) = self.entity_signatures.remove(entity.id() as usize) else { return; };
         let group = self.groups.get_mut(&entity_signature).expect("entity doesnt belong to any groups");
         group.remove(entity.id() as usize);

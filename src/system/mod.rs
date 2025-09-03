@@ -10,7 +10,7 @@ pub struct SystemId(Entity);
 
 impl SystemId {
     #[inline]
-    pub(crate) const fn id(&self) -> Entity {
+    pub(crate) const fn get(&self) -> Entity {
         self.0
     }
 }

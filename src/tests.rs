@@ -85,3 +85,57 @@ fn set_component() {
         assert!(component.validate(i+1), "ComponentB validation failed");
     });
 }
+
+#[test]
+fn add_schedule() {
+    #[derive(ScheduleLabel, Hash, PartialEq, Eq)]
+    struct Tick;
+
+    let mut world = World::default();
+    let mut schedule = Schedule::default();
+    schedule.add_system(|| { println!("I am a system!"); }).unwrap();
+    world.insert_schedule(Tick, schedule);
+    world.run_schedule(&Tick);
+    world.remove_schedule(&Tick).unwrap();
+}
+
+#[test]
+fn remove_system() {
+    let mut world = World::default();
+    let mut schedule = Schedule::default();
+    let id = schedule.add_system(|| { println!("I am a system!"); }).unwrap();
+    world.remove_system(id);
+    schedule.run(&mut world);
+    assert!(schedule.is_empty());
+}
+
+#[test]
+fn entities_despawn() {
+    let mut entities = crate::entity::Entities::new();
+    let a = entities.spawn();
+    entities.despawn(a);
+    assert!(!entities.is_alive(a));
+}
+
+#[test]
+fn simple_observer() {
+    #[derive(Resource)]
+    struct Count(u32);
+
+    #[derive(Event)]
+    struct Tick;
+
+    let mut world = World::default();
+    world.insert_resource(Count(0));
+    for _ in 0..2 {
+        world.add_observer(|_: Signal<Tick>, mut count: ResMut<Count>| {
+            count.0 += 1;
+        }).unwrap();
+    }
+
+    for _ in 0..100 {
+        world.send_signal(Tick, None);
+    }
+
+    assert!(world.resource::<Count>().0 == 200);
+}

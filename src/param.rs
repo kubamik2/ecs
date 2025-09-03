@@ -13,6 +13,7 @@ pub trait SystemParam {
     fn join_signal_access(signal_access: &mut Option<TypeId>) {}
     fn init_state(world: &mut World) -> Self::State;
     /// This function will run in parallel
+    /// It is only meant to fetch the reference to the data from the world
     /// # Safety
     /// The caller must not modify the world such that it would cause a data race
     unsafe fn fetch<'a>(world_ptr: WorldPtr<'a>, state: &'a mut Self::State, system_meta: &'a SystemHandle<'a>) -> Self::Item<'a>;

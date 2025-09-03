@@ -1,6 +1,6 @@
 use std::{any::{Any, TypeId}, collections::HashMap, hash::Hash, ptr::NonNull};
 
-use crate::{access::Access, system::{IntoSystem, System, SystemId, SystemInput, SystemValidationError, SYSTEM_IDS}, world::{World, WorldId, WorldPtr}, Resource};
+use crate::{access::Access, system::{IntoSystem, System, SystemId, SystemInput, SystemValidationError, SYSTEM_IDS}, world::{World, WorldId, WorldPtr}};
 
 const PARALLEL_EXECUTION_THRESHOLD: usize = 4;
 
@@ -12,7 +12,7 @@ pub struct Schedule {
     init_queue: Vec<Box<dyn System<Input = ()> + Send + Sync>>,
 }
 
-pub struct SystemRecord {
+struct SystemRecord {
     system: Box<dyn System<Input = ()> + Send + Sync>,
     bucket_index: usize,
 }
@@ -84,7 +84,7 @@ impl Schedule {
         let mut i = 0;
         while i < self.system_records.len() {
             let system_id = self.system_records[i].system.id();
-            if !system_ids.is_alive(system_id.id()) {
+            if !system_ids.is_alive(system_id.get()) {
                 self.remove_sytem_at(i);
             } else {
                 i += 1;
@@ -132,6 +132,16 @@ impl Schedule {
         // remove the system
         self.system_records.swap_remove(index);
     }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.system_records.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.system_records.is_empty()
+    }
 }
 
 #[derive(Default)]
@@ -161,11 +171,6 @@ pub trait ScheduleLabel: 'static + PartialEq + Eq + Hash {}
 #[derive(Default)]
 pub struct Schedules(HashMap<TypeId, Box<dyn Any>>);
 
-unsafe impl Send for Schedules {}
-unsafe impl Sync for Schedules {}
-
-impl Resource for Schedules {}
-
 impl Schedules {
     pub fn get_mut<L: ScheduleLabel>(&mut self, label: &L) -> Option<&mut Schedule> {
         let boxed_type_schedules = self.0.get_mut(&TypeId::of::<L>())?;
@@ -179,5 +184,17 @@ impl Schedules {
             .or_insert(Box::new(HashMap::<L, Schedule>::default()));
         let type_schedules = unsafe { boxed_type_schedules.downcast_mut_unchecked::<HashMap<L, Schedule>>() };
         type_schedules.insert(label, schedule);
+    }
+
+    pub fn remove<L: ScheduleLabel>(&mut self, label: &L) -> Option<Schedule> {
+        let boxed_type_schedules = self.0.get_mut(&TypeId::of::<L>())?;
+        let type_schedules = unsafe { boxed_type_schedules.downcast_mut_unchecked::<HashMap<L, Schedule>>() };
+        let res = type_schedules.remove(label);
+
+        if type_schedules.is_empty() {
+            self.0.remove(&TypeId::of::<L>());
+        }
+
+        res
     }
 }

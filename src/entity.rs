@@ -1,7 +1,8 @@
 use crate::bitmap::Bitmap;
 use super::{Component, World};
 
-pub const MAX_ENTITIES: usize = u16::MAX as usize;
+// -1 accounts for the invalid entity
+pub const MAX_ENTITIES: usize = u16::MAX as usize - 1;
 
 #[derive(Hash, Clone, Copy, PartialEq, Eq)]
 pub struct Entity {
@@ -10,6 +11,9 @@ pub struct Entity {
 }
 
 impl Entity {
+    const INVALID: Entity = Entity { id: u16::MAX, version: u16::MAX };
+
+    #[inline(always)]
     const fn new(id: u16, version: u16) -> Self {
         assert!(id as usize <= MAX_ENTITIES);
         Self { id, version }
@@ -25,6 +29,7 @@ impl Entity {
         self.id
     }
 
+    #[inline(always)]
     pub(crate) const fn increment_version(&mut self) {
         self.version += 1;
     }
@@ -46,7 +51,7 @@ impl Default for Entities {
     fn default() -> Self {
         Self {
             list: vec![Entity::new(0,0)],
-            next: Entity::new(0,0),
+            next: Entity::INVALID,
             available: 0,
         }
     }
@@ -57,12 +62,12 @@ impl Entities {
     pub const fn new() -> Self {
         Self {
             list: Vec::new(),
-            next: Entity::new(0, 0),
+            next: Entity::INVALID,
             available: 0,
         }
     }
 
-    pub fn remove(&mut self, mut entity: Entity) {
+    pub fn despawn(&mut self, mut entity: Entity) {
         self.available += 1;
         self.list[entity.id() as usize] = self.next;
         entity.increment_version();
@@ -77,6 +82,7 @@ impl Entities {
             self.next = self.list[next as usize];
             self.list[entity.id() as usize] = entity;
             self.available -= 1;
+            debug_assert!(entity != Entity::INVALID);
             entity
         } else {
             let entity = Entity::new(self.list.len() as u16, 0);

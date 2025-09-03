@@ -159,7 +159,7 @@ impl Commands<'_> {
                     cursor += data_size;
                 },
                 CommandMeta::Despawn(entity) => {
-                    world.remove(entity);
+                    world.despawn(entity);
                 },
                 CommandMeta::SetComponent { f, entity, data_size } => {
                     let ptr = unsafe { (&mut self.queue[0] as *mut u8).add(cursor) };
@@ -175,7 +175,7 @@ impl Commands<'_> {
                     cursor += data_size;
                 },
                 CommandMeta::RemoveSystem { id } => {
-                    SYSTEM_IDS.write().unwrap().remove(id.id());
+                    SYSTEM_IDS.write().unwrap().despawn(id.get());
                 }
             }
         }

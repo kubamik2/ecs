@@ -34,7 +34,7 @@ impl Observers {
         while i < self.systems.len() {
             let id = self.systems[i].id();
             let event_type_id = self.systems[i].signal_access().expect("observer no signal access");
-            if !system_ids.is_alive(id.id()) {
+            if !system_ids.is_alive(id.get()) {
                 let system_ptrs = self.event_to_systems.get_mut(event_type_id).expect("dangling event");
 
                 let position = system_ptrs
