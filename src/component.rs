@@ -10,11 +10,13 @@ pub const MAX_COMPONENTS: usize = Bitmap::WIDTH;
 pub struct ComponentId(usize);
 
 impl ComponentId {
-    pub fn id(&self) -> usize {
+    #[inline]
+    pub const fn get(&self) -> usize {
         self.0
     }
 
-    pub(crate) fn as_signature(&self) -> Signature {
+    #[inline]
+    pub(crate) const fn as_signature(&self) -> Signature {
         Signature::new().with_set(self.0)
     }
 }

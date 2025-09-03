@@ -1,6 +1,6 @@
 use std::{any::TypeId, marker::PhantomData, ptr::{self, NonNull}};
 
-use crate::{observer::{ObserverInput, Observers, SignalInput}, resource::ResourceId, system::{IntoSystem, System, SystemId, SystemValidationError}, *};
+use crate::{observer::{ObserverInput, Observers, SignalInput}, resource::ResourceId, schedule::Schedules, system::{IntoSystem, System, SystemValidationError}, *};
 
 static WORLD_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -14,7 +14,6 @@ pub struct World {
     resources: resource::Resources,
     observers: Observers,
     pub(crate) thread_pool: rayon::ThreadPool,
-    pub(crate) marked_sytems_for_removal: Vec<SystemId>,
 }
 
 impl Default for World {
@@ -36,7 +35,6 @@ impl World {
             resources: Default::default(),
             observers: Default::default(),
             thread_pool: rayon::ThreadPoolBuilder::new().use_current_thread().num_threads(num_threads).build()?,
-            marked_sytems_for_removal: Default::default(),
         };
 
         world.insert_resource(schedule::Schedules::default());
@@ -48,6 +46,7 @@ impl World {
         self.id
     }
 
+    #[inline]
     pub fn world_ptr(&self) -> WorldPtr<'_> {
         WorldPtr {
             ptr: NonNull::new(ptr::from_ref(self).cast_mut()).expect("world pointer cast null"),
@@ -56,6 +55,7 @@ impl World {
         }
     }
 
+    #[inline]
     pub fn world_ptr_mut(&mut self) -> WorldPtr<'_> {
         WorldPtr {
             ptr: NonNull::new(ptr::from_mut(self)).expect("world pointer cast null"),
@@ -80,10 +80,6 @@ impl World {
         schedules.insert(label, schedule);
     }
 
-    pub fn queue_system_removal(&mut self, system_id: SystemId) {
-        self.marked_sytems_for_removal.push(system_id);
-    }
-
 
     // ===== Resources =====
 
@@ -100,7 +96,7 @@ impl World {
         self.resources.get::<R>()
     }
 
-    pub fn get_mut_resource<R: Resource>(&mut self) -> Option<ResMut<'_, R>> {
+    pub fn get_resource_mut<R: Resource>(&mut self) -> Option<ResMut<'_, R>> {
         self.resources.get_mut::<R>()
     }
 
@@ -139,7 +135,7 @@ impl World {
 
     /// # Safety
     /// caller must ensure that the borrow is safe
-    pub unsafe fn get_mut_resource_by_id<R: Resource>(&mut self, id: ResourceId) -> Option<ResMut<R>> {
+    pub unsafe fn get_resource_by_id_mut<R: Resource>(&mut self, id: ResourceId) -> Option<ResMut<R>> {
         unsafe { self.resources.get_mut_resource_by_id(id) }
     }
 
@@ -152,7 +148,7 @@ impl World {
 
     /// # Safety
     /// caller must ensure that the borrow is safe
-    pub unsafe fn resource_mut_by_id<R: Resource>(&mut self, id: ResourceId) -> ResMut<R> {
+    pub unsafe fn resource_by_id_mut<R: Resource>(&mut self, id: ResourceId) -> ResMut<R> {
         unsafe { self.resources.get_mut_resource_by_id(id)
             .unwrap_or_else(|| panic!("resource '{}' not initialized", std::any::type_name::<R>())) }
     }
@@ -186,7 +182,7 @@ impl World {
         self.components.get_component(entity)
     }
 
-    pub fn get_mut_component<C: Component>(&mut self, entity: Entity) -> Option<&mut C> {
+    pub fn get_component_mut<C: Component>(&mut self, entity: Entity) -> Option<&mut C> {
         if !self.is_alive(entity) { return None; }
         self.components.get_mut_component(entity)
     }
@@ -206,14 +202,14 @@ impl World {
 
     /// # Safety
     /// caller must ensure that the borrow is safe
-    pub unsafe fn get_mut_component_by_id<C: Component>(&mut self, entity: Entity, component_id: ComponentId) -> Option<&mut C> {
+    pub unsafe fn get_component_by_id_mut<C: Component>(&mut self, entity: Entity, component_id: ComponentId) -> Option<&mut C> {
         if !self.is_alive(entity) { return None; }
         unsafe { self.components.get_mut_component_by_id(entity, component_id) }
     }
 
     /// # Safety
     /// caller must ensure that the borrow is safe and the entity is alive
-    pub unsafe fn get_mut_component_by_id_unchecked<C: Component>(&mut self, entity: Entity, component_id: ComponentId) -> &mut C {
+    pub unsafe fn get_component_by_id_unchecked_mut<C: Component>(&mut self, entity: Entity, component_id: ComponentId) -> &mut C {
         unsafe { self.components.get_mut_component_by_id_unchecked(entity, component_id) }
     }
 
@@ -248,7 +244,7 @@ impl World {
     
     /// # Safety
     /// caller must manually set the components
-    pub unsafe fn spawn_with_signature(&mut self, signature: Signature) -> Entity {
+    pub(crate) unsafe fn spawn_with_signature(&mut self, signature: Signature) -> Entity {
         let entity = self.entity_manager.spawn();
         unsafe { self.components.insert_empty_entity(entity, signature) };
         entity
@@ -315,7 +311,7 @@ impl<'a> WorldPtr<'a> {
 
     #[inline]
     pub unsafe fn as_world_mut(&mut self) -> &'a mut World {
-        assert!(self.allow_mutable_access);
+        debug_assert!(self.allow_mutable_access);
         unsafe { self.ptr.as_mut() }
     }
 

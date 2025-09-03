@@ -118,9 +118,7 @@ impl Schedule {
             else { panic!("system not in bucket"); };
         
         // remove system from bucket
-        let last_index = bucket.systems.len()-1;
-        bucket.systems.swap(position, last_index);
-        bucket.systems.pop();
+        bucket.systems.swap_remove(position);
 
         // recreate the bucket
         bucket.joined_component_access.clear();
@@ -132,9 +130,7 @@ impl Schedule {
         }
 
         // remove the system
-        let last_index = self.system_records.len()-1;
-        self.system_records.swap(index, last_index);
-        self.system_records.pop();
+        self.system_records.swap_remove(index);
     }
 }
 
@@ -171,12 +167,6 @@ unsafe impl Sync for Schedules {}
 impl Resource for Schedules {}
 
 impl Schedules {
-    pub fn get<L: ScheduleLabel>(&self, label: &L) -> Option<&Schedule> {
-        let boxed_type_schedules = self.0.get(&TypeId::of::<L>())?;
-        let type_schedules = unsafe { boxed_type_schedules.downcast_ref_unchecked::<HashMap<L, Schedule>>() };
-        type_schedules.get(label)
-    }
-
     pub fn get_mut<L: ScheduleLabel>(&mut self, label: &L) -> Option<&mut Schedule> {
         let boxed_type_schedules = self.0.get_mut(&TypeId::of::<L>())?;
         let type_schedules = unsafe { boxed_type_schedules.downcast_mut_unchecked::<HashMap<L, Schedule>>() };

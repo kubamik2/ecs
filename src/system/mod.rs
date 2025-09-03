@@ -109,6 +109,7 @@ impl<Input, ParamIn, F: SystemFunc<ParamIn, Input>> System for FunctionSystem<Pa
         self.name
     }
 
+    #[inline]
     fn init(&mut self, world: &mut World) {
         self.state = Some(F::init_state(world));
         let mut component_access = Access::default();
@@ -120,6 +121,7 @@ impl<Input, ParamIn, F: SystemFunc<ParamIn, Input>> System for FunctionSystem<Pa
         self.validate().unwrap();
     }
 
+    #[inline]
     fn after(&mut self, world: &mut World) {
         let name = self.name;
         let state = self.state.as_mut().unwrap_or_else(|| panic!("system '{}' has been executed without initialization", name));
@@ -151,6 +153,7 @@ impl<F, Input> SystemFunc<(), Input> for F where
     for<'a> &'a F: FnMut()
 {
     type State = ();
+    #[inline]
     fn run<'a>(&'a self, _: WorldPtr<'a>, _: &'a mut Self::State, _: Input, _: &'a SystemHandle<'a>) {
         fn call(mut f: impl FnMut()) {
             f()
@@ -158,19 +161,25 @@ impl<F, Input> SystemFunc<(), Input> for F where
         call(self)
     }
 
+    #[inline]
     fn join_resource_access(_: &mut World, _: &mut Access) {}
 
+    #[inline]
     fn join_component_access(_: &mut World, _: &mut Access) {}
 
+    #[inline]
     fn signal_access() -> Option<TypeId> {
         None
     }
 
+    #[inline]
     fn name(&self) -> &'static str {
         std::any::type_name::<F>()
     }
 
+    #[inline]
     fn init_state(_: &mut World) -> Self::State {}
+    #[inline]
     fn after(_: &mut World, _: &mut Self::State, _: SystemHandle) {}
 }
 
@@ -182,6 +191,7 @@ impl<F, ParamIn, Input> SystemFunc<ParamIn, Input> for F where
     ParamIn: for<'a> SystemParam + 'static,
 {
     type State = ParamIn::State;
+    #[inline]
     fn run<'a>(&'a self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: Input, system_meta: &'a SystemHandle<'a>) {
         fn call<In>(mut f: impl FnMut(In), p: In) {
             f(p)
@@ -190,26 +200,32 @@ impl<F, ParamIn, Input> SystemFunc<ParamIn, Input> for F where
         call(self, p);
     }
 
+    #[inline]
     fn join_component_access(world: &mut World, component_access: &mut Access) {
         ParamIn::join_component_access(world, component_access);
     }
 
+    #[inline]
     fn join_resource_access(world: &mut World, resource_access: &mut Access) {
         ParamIn::join_resource_access(world, resource_access);
     }
 
+    #[inline]
     fn name(&self) -> &'static str {
         std::any::type_name::<F>()
     }
 
+    #[inline]
     fn init_state(world: &mut World) -> Self::State {
         ParamIn::init_state(world)
     }
 
+    #[inline]
     fn signal_access() -> Option<TypeId> {
         None
     }
 
+    #[inline]
     fn after<'a>(world: &'a mut World, state: &'a mut Self::State, mut system_meta: SystemHandle<'a>) {
         ParamIn::after(world, state, &mut system_meta);
     }

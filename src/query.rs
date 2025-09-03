@@ -180,7 +180,7 @@ impl<C: Component> QueryItem for &C {
 
     #[inline]
     fn join_component_access(world: &mut World, component_access: &mut Access) {
-        component_access.immutable.set(world.register_component::<C>().id());
+        component_access.immutable.set(world.register_component::<C>().get());
     }
 }
 
@@ -194,7 +194,7 @@ impl<C: Component> QueryItem for &mut C {
 
     #[inline]
     unsafe fn fetch_mut(mut world_ptr: WorldPtr<'_>, entity: Entity, component_index: ComponentId) -> Self::ItemMut<'_> {
-        unsafe { world_ptr.as_world_mut().get_mut_component_by_id_unchecked::<C>(entity, component_index) }
+        unsafe { world_ptr.as_world_mut().get_component_by_id_unchecked_mut::<C>(entity, component_index) }
     }
 
     fn component_id_or_init(world: &mut World) -> ComponentId {
@@ -218,7 +218,7 @@ impl<C: Component> QueryItem for &mut C {
 
     #[inline]
     fn join_component_access(world: &mut World, component_access: &mut Access) {
-        component_access.mutable.set(world.register_component::<C>().id());
+        component_access.mutable.set(world.register_component::<C>().get());
         component_access.mutable_count += 1;
     }
 }
@@ -275,7 +275,7 @@ impl<C: Component> QueryItem for Option<&C> {
 
     #[inline]
     fn join_component_access(world: &mut World, component_access: &mut Access) {
-        component_access.immutable.set(world.register_component::<C>().id())
+        component_access.immutable.set(world.register_component::<C>().get())
     }
 }
 
@@ -289,7 +289,7 @@ impl<C: Component> QueryItem for Option<&mut C> {
 
     #[inline]
     unsafe fn fetch_mut(mut world_ptr: WorldPtr<'_>, entity: Entity, component_index: ComponentId) -> Self::ItemMut<'_> {
-        unsafe { world_ptr.as_world_mut().get_mut_component_by_id::<C>(entity, component_index) }
+        unsafe { world_ptr.as_world_mut().get_component_by_id_mut::<C>(entity, component_index) }
     }
 
     fn component_id_or_init(world: &mut World) -> ComponentId {
@@ -308,7 +308,7 @@ impl<C: Component> QueryItem for Option<&mut C> {
 
     #[inline]
     fn join_component_access(world: &mut World, component_access: &mut Access) {
-        component_access.mutable.set(world.register_component::<C>().id());
+        component_access.mutable.set(world.register_component::<C>().get());
         component_access.mutable_count += 1;
     }
 }

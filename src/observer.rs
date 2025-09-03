@@ -41,13 +41,9 @@ impl Observers {
                     .iter()
                     .position(|p| unsafe { p.as_ref() }.id() == id)
                     .expect("dangling observer");
-                let last_index = system_ptrs.len()-1;
-                system_ptrs.swap(position, last_index);
-                system_ptrs.pop();
+                system_ptrs.swap_remove(position);
 
-                let last_index = self.systems.len()-1;
-                self.systems.swap(i, last_index);
-                self.systems.pop();
+                self.systems.swap_remove(i);
             } else {
                 i += 1;
             }

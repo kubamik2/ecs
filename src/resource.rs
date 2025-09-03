@@ -185,6 +185,6 @@ impl<R: Resource + Send + Sync + 'static> SystemParam for ResMut<'_, R> {
     }
 
     unsafe fn fetch<'a>(mut world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: &SystemHandle) -> Self::Item<'a> {
-        unsafe { world_ptr.as_world_mut().resource_mut_by_id(*state) }
+        unsafe { world_ptr.as_world_mut().resource_by_id_mut(*state) }
     }
 }

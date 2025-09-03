@@ -18,13 +18,13 @@ mod storage;
 pub use component::{ComponentId, Signature};
 pub use world::World;
 pub use query::Query;
-pub use resource::{Res, ResMut};
+pub use resource::{Res, ResMut, ResourceId};
 pub use derive::{Component, Resource, Event, ScheduleLabel};
-pub use schedule::{Schedule, Schedules, ScheduleLabel};
+pub use schedule::{Schedule, ScheduleLabel};
 pub use system::{Commands, SystemHandle};
 pub use signal::Signal;
 pub use event::{Event, EventReader, EventReadWriter, EventQueue};
-pub use entity::Entity;
+pub use entity::{Entity, EntityBundle};
 
 pub trait Component: Send + Sync + 'static {}
 pub trait Resource: Send + Sync + 'static {}

@@ -1,9 +1,5 @@
 use crate::{param::SystemParam, system::SystemHandle, world::WorldPtr, Res, ResMut, Resource, World};
 
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct EventId(u16);
-
 pub trait Event: Send + Sync + 'static {}
 
 pub struct EventQueue<E: Event> {
