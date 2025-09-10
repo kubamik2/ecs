@@ -1,6 +1,6 @@
 use std::{any::TypeId, marker::PhantomData, ptr::{self, NonNull}};
 
-use crate::{observer::{ObserverInput, Observers, SignalInput}, resource::ResourceId, schedule::Schedules, system::{IntoSystem, System, SystemId, SystemValidationError, SYSTEM_IDS}, *};
+use crate::{observer::{ObserverInput, Observers, SignalInput}, query::QueryData, resource::ResourceId, schedule::Schedules, system::{IntoSystem, System, SystemId, SYSTEM_IDS}, *};
 
 static WORLD_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -67,10 +67,10 @@ impl World {
     // ===== Schedules =====
 
 
-    pub fn run_schedule<L: schedule::ScheduleLabel>(&mut self, label: &L) {
+    pub fn run_schedule<L: schedule::ScheduleLabel>(&mut self, label: L) {
         let mut world_ptr = self.world_ptr_mut();
         let world = unsafe { world_ptr.as_world_mut() };
-        let Some(schedule) = world.schedules.get_mut(label) else { return; };
+        let Some(schedule) = world.schedules.get_mut(&label) else { return; };
         schedule.run(unsafe { world_ptr.as_world_mut() });
     }
 
@@ -141,34 +141,26 @@ impl World {
             .unwrap_or_else(|| panic!("resource '{}' not identified", std::any::type_name::<R>()))
     }
 
-    /// # Safety
-    /// caller must ensure that the borrow is safe
     #[inline]
-    pub unsafe fn get_resource_by_id<R: Resource>(&self, id: ResourceId) -> Option<Res<R>> {
-        unsafe { self.resources.get_resource_by_id(id) }
+    pub fn get_resource_by_id<R: Resource>(&self, id: ResourceId) -> Option<Res<R>> {
+        self.resources.get_resource_by_id(id)
     }
 
-    /// # Safety
-    /// caller must ensure that the borrow is safe
     #[inline]
-    pub unsafe fn get_resource_by_id_mut<R: Resource>(&mut self, id: ResourceId) -> Option<ResMut<R>> {
-        unsafe { self.resources.get_mut_resource_by_id(id) }
+    pub fn get_resource_by_id_mut<R: Resource>(&mut self, id: ResourceId) -> Option<ResMut<R>> {
+        self.resources.get_mut_resource_by_id(id)
     }
 
-    /// # Safety
-    /// caller must ensure that the borrow is safe
     #[inline]
-    pub unsafe fn resource_by_id<R: Resource>(&self, id: ResourceId) -> Res<R> {
-        unsafe { self.resources.get_resource_by_id(id)
-            .unwrap_or_else(|| panic!("resource '{}' not initialized", std::any::type_name::<R>())) }
+    pub fn resource_by_id<R: Resource>(&self, id: ResourceId) -> Res<R> {
+        self.resources.get_resource_by_id(id)
+            .unwrap_or_else(|| panic!("resource '{}' not initialized", std::any::type_name::<R>()))
     }
 
-    /// # Safety
-    /// caller must ensure that the borrow is safe
     #[inline]
-    pub unsafe fn resource_by_id_mut<R: Resource>(&mut self, id: ResourceId) -> ResMut<R> {
-        unsafe { self.resources.get_mut_resource_by_id(id)
-            .unwrap_or_else(|| panic!("resource '{}' not initialized", std::any::type_name::<R>())) }
+    pub fn resource_by_id_mut<R: Resource>(&mut self, id: ResourceId) -> ResMut<R> {
+        self.resources.get_mut_resource_by_id(id)
+            .unwrap_or_else(|| panic!("resource '{}' not initialized", std::any::type_name::<R>()))
     }
 
 
@@ -187,7 +179,7 @@ impl World {
     }
 
     /// # Safety
-    /// caller must ensure that the entity is alive and the given component exists
+    /// Caller must ensure that the entity is alive and the given component exists
     #[inline]
     pub(crate) unsafe fn set_component_unchecked<C: Component>(&mut self, entity: Entity, component: C) {
         unsafe { self.components.set_component_unchecked(entity, component) };
@@ -212,7 +204,8 @@ impl World {
     }
 
     /// # Safety
-    /// caller must ensure that the borrow is safe
+    /// Entity must be alive
+    /// Component_id must correspond to a component array of type C
     #[inline]
     pub unsafe fn get_component_by_id<C: Component>(&self, entity: Entity, component_id: ComponentId) -> Option<&C> {
         if !self.is_alive(entity) { return None; }
@@ -220,14 +213,16 @@ impl World {
     }
 
     /// # Safety
-    /// caller must ensure that the borrow is safe and the entity is alive
+    /// Entity must be alive
+    /// Component_id must correspond to a component array of type C
     #[inline]
     pub unsafe fn get_component_by_id_unchecked<C: Component>(&self, entity: Entity, component_id: ComponentId) -> &C {
         unsafe { self.components.get_component_by_id_unchecked(entity, component_id) }
     }
 
     /// # Safety
-    /// caller must ensure that the borrow is safe
+    /// Entity must be alive
+    /// Component_id must correspond to a component array of type C
     #[inline]
     pub unsafe fn get_component_by_id_mut<C: Component>(&mut self, entity: Entity, component_id: ComponentId) -> Option<&mut C> {
         if !self.is_alive(entity) { return None; }
@@ -235,7 +230,8 @@ impl World {
     }
 
     /// # Safety
-    /// caller must ensure that the borrow is safe and the entity is alive
+    /// Entity must be alive
+    /// Component_id must correspond to a component array of type C
     #[inline]
     pub unsafe fn get_component_by_id_unchecked_mut<C: Component>(&mut self, entity: Entity, component_id: ComponentId) -> &mut C {
         unsafe { self.components.get_mut_component_by_id_unchecked(entity, component_id) }
@@ -316,11 +312,12 @@ impl World {
     // ===== Observers =====
 
 
-    pub fn add_observer<ParamIn: ObserverInput, S: IntoSystem<ParamIn, SignalInput> + 'static>(&mut self, system: S) -> Result<(), SystemValidationError> {
+    pub fn add_observer<ParamIn: ObserverInput, S: IntoSystem<ParamIn, SignalInput> + 'static>(&mut self, system: S) -> SystemId {
         let mut system: Box<dyn System<Input = SignalInput> + Send + Sync> = Box::new(system.into_system());
+        let id = system.id();
         system.init(self);
         self.observers.add_boxed_observer(system);
-        Ok(())
+        id
     }
 
     #[inline]
@@ -334,6 +331,36 @@ impl World {
     #[inline]
     pub fn remove_system(&self, system_id: SystemId) {
         SYSTEM_IDS.write().unwrap().despawn(system_id.get());
+    }
+
+    #[inline]
+    pub fn add_system<L: ScheduleLabel, ParamIn: SystemInput, S: IntoSystem<ParamIn, ()> + 'static>(&mut self, label: L, system: S) {
+        let schedule = self.schedules.get_or_default(label);
+        schedule.add_system(system);
+    }
+
+
+    // ===== Events =====
+
+
+    #[inline]
+    pub fn send_event<E: Event>(&mut self, event: E) {
+        let mut event_queue = self.get_resource_or_insert_with(|| EventQueue::<E>::new());
+        event_queue.send(event);
+    }
+
+    #[inline]
+    pub fn register_event<E: Event>(&mut self) {
+        self.get_resource_or_insert_with(|| EventQueue::<E>::new());
+    }
+
+    
+    // ===== Other =====
+    
+
+    #[inline]
+    pub fn query<D: QueryData>(&mut self) -> Query<'_, D> {
+        Query::new(self)
     }
 }
 

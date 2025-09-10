@@ -1,6 +1,8 @@
+use std::marker::PhantomData;
+
 use crate::{param::SystemParam, system::SystemHandle, world::WorldPtr, Res, ResMut, Resource, World};
 
-pub trait Event: Send + Sync + 'static {}
+pub trait Event = Send + Sync + 'static;
 
 pub struct EventQueue<E: Event> {
     old: Vec<E>,
@@ -145,5 +147,28 @@ impl<'a, E: Event> Iterator for EventIterator<'a, E> {
     type Item = &'a E;
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().inspect(|_| *self.last_count += 1)
+    }
+}
+
+#[derive(Default)]
+pub struct EventReaderState<E: Event> {
+    last_count: usize,
+    _m: PhantomData<E>,
+}
+
+impl<E: Event> EventReaderState<E> {
+    #[inline]
+    pub const fn new() -> Self {
+        Self {
+            last_count: 0,
+            _m: PhantomData,
+        }
+    }
+
+    pub fn reader<'a>(&'a mut self, world: &'a World) -> EventReader<'a, E> {
+        EventReader {
+            last_count: &mut self.last_count,
+            event_queue: world.resource(),
+        }
     }
 }

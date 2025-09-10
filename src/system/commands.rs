@@ -1,4 +1,4 @@
-use crate::{entity::EntityBundle, param::SystemParam, world::WorldPtr, Component, Entity, Event, World};
+use crate::{entity::EntityBundle, param::SystemParam, world::WorldPtr, Component, Entity, Event, ScheduleLabel, World};
 
 use super::{SystemHandle, SystemId, SYSTEM_IDS};
 
@@ -28,6 +28,10 @@ enum CommandMeta {
     },
     RemoveSystem {
         id: SystemId,
+    },
+    RunSchedule {
+        f: fn(&mut World, *mut u8),
+        data_size: usize,
     }
 }
 
@@ -139,6 +143,24 @@ impl Commands<'_> {
         self.copy_data(&command_meta, index);
     }
 
+    pub fn run_schedule<L: ScheduleLabel>(&mut self, label: L) {
+        let additional = size_of::<CommandMeta>() + size_of::<L>();
+        let index = self.queue.len();
+        self.queue.resize(self.queue.len() + additional, 0);
+        
+        let command_meta = CommandMeta::RunSchedule {
+            f: |world, data| {
+                let data = data as *mut L;
+                let label = unsafe { data.read_unaligned() };
+                world.run_schedule(label);
+            },
+            data_size: size_of::<L>(),
+        };
+
+        self.copy_data(&command_meta, index);
+        self.copy_data(&label, index + size_of::<L>());
+    }
+
     unsafe fn read_command_meta(&self, index: usize) -> CommandMeta {
         use std::ptr::NonNull;
         let ptr = NonNull::from(&self.queue[index]).cast::<CommandMeta>();
@@ -176,6 +198,11 @@ impl Commands<'_> {
                 },
                 CommandMeta::RemoveSystem { id } => {
                     SYSTEM_IDS.write().unwrap().despawn(id.get());
+                },
+                CommandMeta::RunSchedule { f, data_size } => {
+                    let ptr = unsafe { (&mut self.queue[0] as *mut u8).add(cursor) };
+                    (f)(world, ptr);
+                    cursor += data_size;
                 }
             }
         }

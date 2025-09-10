@@ -93,9 +93,9 @@ fn add_schedule() {
 
     let mut world = World::default();
     let mut schedule = Schedule::default();
-    schedule.add_system(|| { println!("I am a system!"); }).unwrap();
+    schedule.add_system(|| { println!("I am a system!"); });
     world.insert_schedule(Tick, schedule);
-    world.run_schedule(&Tick);
+    world.run_schedule(Tick);
     world.remove_schedule(&Tick).unwrap();
 }
 
@@ -103,7 +103,7 @@ fn add_schedule() {
 fn remove_system() {
     let mut world = World::default();
     let mut schedule = Schedule::default();
-    let id = schedule.add_system(|| { println!("I am a system!"); }).unwrap();
+    let id = schedule.add_system(|| { println!("I am a system!"); });
     world.remove_system(id);
     schedule.run(&mut world);
     assert!(schedule.is_empty());
@@ -122,7 +122,6 @@ fn simple_observer() {
     #[derive(Resource)]
     struct Count(u32);
 
-    #[derive(Event)]
     struct Tick;
 
     let mut world = World::default();
@@ -130,7 +129,7 @@ fn simple_observer() {
     for _ in 0..2 {
         world.add_observer(|_: Signal<Tick>, mut count: ResMut<Count>| {
             count.0 += 1;
-        }).unwrap();
+        });
     }
 
     for _ in 0..100 {
@@ -138,4 +137,41 @@ fn simple_observer() {
     }
 
     assert!(world.resource::<Count>().0 == 200);
+}
+
+#[test]
+fn events() {
+    #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+    pub struct EventA(u32);
+    static mut CNT: usize = 0;
+
+    let mut world = World::default();
+    world.register_event::<EventA>();
+
+    let mut event_state = EventReaderState::<EventA>::new();
+    assert!(event_state.reader(&world).read().next().is_none());
+    world.resource_mut::<EventQueue<EventA>>().send(EventA(12));
+    world.resource_mut::<EventQueue<EventA>>().send(EventA(1));
+    assert!(event_state.reader(&world).read().next().copied() == Some(EventA(12)));
+
+    let mut schedule = Schedule::default();
+    schedule.add_system(|mut reader: EventReader<EventA>| {
+        let next = reader.read().next().copied();
+        if unsafe { CNT == 0 } {
+            assert!(next == Some(EventA(12)));
+        } else {
+            assert!(next == Some(EventA(1)));
+        }
+        unsafe { CNT += 1 };
+    });
+    schedule.run(&mut world);
+
+    world.resource_mut::<EventQueue<EventA>>().update();
+    world.resource_mut::<EventQueue<EventA>>().update();
+
+    let mut schedule = Schedule::default();
+    schedule.add_system(|mut reader: EventReader<EventA>| {
+        assert!(reader.read().next().is_none());
+    });
+    schedule.run(&mut world);
 }

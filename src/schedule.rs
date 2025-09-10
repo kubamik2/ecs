@@ -1,6 +1,6 @@
 use std::{any::{Any, TypeId}, collections::HashMap, hash::Hash, ptr::NonNull};
 
-use crate::{access::Access, system::{IntoSystem, System, SystemId, SystemInput, SystemValidationError, SYSTEM_IDS}, world::{World, WorldId, WorldPtr}};
+use crate::{access::Access, system::{IntoSystem, System, SystemId, SystemInput, SYSTEM_IDS}, world::{World, WorldId, WorldPtr}};
 
 const PARALLEL_EXECUTION_THRESHOLD: usize = 4;
 
@@ -18,12 +18,12 @@ struct SystemRecord {
 }
 
 impl Schedule {
-    pub fn add_system<ParamInput: SystemInput, S: IntoSystem<ParamInput, ()> + 'static>(&mut self, system: S) -> Result<SystemId, SystemValidationError> {
+    pub fn add_system<ParamInput: SystemInput, S: IntoSystem<ParamInput, ()> + 'static>(&mut self, system: S) -> SystemId {
         let system: S::System = system.into_system();
         let id = system.id();
 
         self.init_queue.push(Box::new(system));
-        Ok(id)
+        id
     }
 
     pub fn init_system(&mut self, world: &mut World, mut system: Box<dyn System<Input = ()> + Send + Sync>) {
@@ -196,5 +196,11 @@ impl Schedules {
         }
 
         res
+    }
+
+    pub fn get_or_default<L: ScheduleLabel>(&mut self, label: L) -> &mut Schedule {
+        let boxed_type_schedules = self.0.entry(TypeId::of::<L>()).or_insert_with(|| Box::new(HashMap::<L, Schedule>::default()));
+        let type_schedules = unsafe { boxed_type_schedules.downcast_mut_unchecked::<HashMap<L, Schedule>>() };
+        type_schedules.entry(label).or_default()
     }
 }

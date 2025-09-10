@@ -35,14 +35,6 @@ pub trait System {
     fn after(&mut self, world: &mut World);
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum SystemValidationError {
-    MultipleComponentMutRefs,
-    IncompatibleComponentRefs,
-    MultipleResourceMutRefs,
-    IncompatibleResourceRefs,
-}
-
 pub struct FunctionSystem<ParamIn, Input, F: SystemFunc<ParamIn, Input>> {
     id: SystemId,
     name: &'static str,
@@ -55,22 +47,13 @@ pub struct FunctionSystem<ParamIn, Input, F: SystemFunc<ParamIn, Input>> {
 }
 
 impl<Input, ParamIn, F: SystemFunc<ParamIn, Input>> FunctionSystem<ParamIn, Input, F> {
-    fn validate(&self) -> Result<(), SystemValidationError> {
+    fn validate(&self) {
         let component_access = self.component_access();
         let resource_access = self.resource_access();
-        if component_access.mutable_count > component_access.mutable.ones() {
-            return Err(SystemValidationError::MultipleComponentMutRefs);
-        }
-        if !(component_access.immutable & component_access.mutable).is_zero() {
-            return Err(SystemValidationError::IncompatibleComponentRefs);
-        }
-        if resource_access.mutable_count > resource_access.mutable.ones() {
-            return Err(SystemValidationError::MultipleResourceMutRefs);
-        }
-        if !(resource_access.immutable & resource_access.mutable).is_zero() {
-            return Err(SystemValidationError::IncompatibleResourceRefs);
-        }
-        Ok(())
+        assert!(component_access.mutable_count == component_access.mutable.ones(), "'{}' system: duplicate mutable component references", self.name);
+        assert!((component_access.immutable & component_access.mutable).is_zero(), "'{}' system: incompatible component references", self.name);
+        assert!(resource_access.mutable_count == resource_access.mutable.ones(), "'{}' system: duplicate mutable resource references", self.name);
+        assert!((resource_access.immutable & resource_access.mutable).is_zero(), "'{}' system: incompatible resource references", self.name);
     }
 }
 
@@ -118,7 +101,7 @@ impl<Input, ParamIn, F: SystemFunc<ParamIn, Input>> System for FunctionSystem<Pa
         F::join_resource_access(world, &mut resource_access);
         self.component_access = Some(component_access);
         self.resource_access = Some(resource_access);
-        self.validate().unwrap();
+        self.validate();
     }
 
     #[inline]

@@ -110,7 +110,7 @@ impl Resources {
     }
 
     #[inline]
-    pub unsafe fn get_resource_by_id<R: Resource>(&self, id: ResourceId) -> Option<Res<'_, R>> {
+    pub fn get_resource_by_id<R: Resource>(&self, id: ResourceId) -> Option<Res<'_, R>> {
         self.sparse_set.get(id.get()).map(|raw| {
             let val = unsafe { raw.get().as_ref().unwrap_unchecked().downcast_ref::<R>().expect("Resources::get_resource_by_id invalid cast") };
             Res { val }
@@ -118,7 +118,7 @@ impl Resources {
     }
 
     #[inline]
-    pub unsafe fn get_mut_resource_by_id<R: Resource>(&self, id: ResourceId) -> Option<ResMut<'_, R>> {
+    pub fn get_mut_resource_by_id<R: Resource>(&mut self, id: ResourceId) -> Option<ResMut<'_, R>> {
         self.sparse_set.get(id.get()).map(|raw| {
             let val = unsafe { raw.get().as_mut().unwrap_unchecked().downcast_mut::<R>().expect("Resources::get_resource_by_id invalid cast") };
             ResMut { val }
