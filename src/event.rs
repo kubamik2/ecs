@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use crate::{param::SystemParam, system::SystemHandle, world::WorldPtr, Res, ResMut, Resource, World};
+use crate::{param::SystemParam, system::SystemHandle, world::WorldPtr, Resource, World};
 
 pub trait Event = Send + Sync + 'static;
 
@@ -53,12 +53,12 @@ impl<E: Event> EventQueue<E> {
 
 pub struct EventReader<'a, E: Event> {
     last_count: &'a mut usize,
-    event_queue: Res<'a, EventQueue<E>>,
+    event_queue: &'a EventQueue<E>,
 }
 
 impl<E: Event> EventReader<'_, E> {
     pub fn read(&mut self) -> EventIterator<E> {
-        EventIterator::new(&self.event_queue, self.last_count)
+        EventIterator::new(self.event_queue, self.last_count)
     }
 }
 
@@ -84,12 +84,12 @@ impl<E: Event> SystemParam for EventReader<'_, E> {
 
 pub struct EventReadWriter<'a, E: Event> {
     last_count: &'a mut usize,
-    event_queue: ResMut<'a, EventQueue<E>>,
+    event_queue: &'a mut EventQueue<E>,
 }
 
 impl<E: Event> EventReadWriter<'_, E> {
     pub fn read(&mut self) -> EventIterator<E> {
-        EventIterator::new(&self.event_queue, self.last_count)
+        EventIterator::new(self.event_queue, self.last_count)
     }
 
     pub fn send(&mut self, event: E) {
@@ -108,8 +108,8 @@ impl<E: Event> SystemParam for EventReadWriter<'_, E> {
         0
     }
 
-    unsafe fn fetch<'a>(mut world_ptr: WorldPtr<'a>, state: &'a mut usize, _: &SystemHandle) -> Self::Item<'a> {
-        let event_queue = unsafe { world_ptr.as_world_mut() }.resource_mut::<EventQueue<E>>();
+    unsafe fn fetch<'a>(mut world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: &SystemHandle) -> Self::Item<'a> {
+        let event_queue = unsafe { world_ptr.as_world_mut() }.resource_ref_mut::<EventQueue<E>>();
         EventReadWriter {
             last_count: state,
             event_queue,

@@ -1,4 +1,4 @@
-use std::{any::{Any, TypeId}, cell::SyncUnsafeCell, collections::HashMap, ops::{Deref, DerefMut}};
+use std::{any::{Any, TypeId}, cell::SyncUnsafeCell, collections::HashMap, marker::PhantomData, ops::{Deref, DerefMut}};
 
 use crate::{storage::sparse_set::SparseSet, system::SystemHandle, world::WorldPtr};
 
@@ -11,8 +11,7 @@ impl ResourceId {
     #[inline]
     pub const fn get(&self) -> usize {
         self.0
-    }
-}
+    } }
 
 #[derive(Default)]
 pub struct Resources {
@@ -34,33 +33,37 @@ impl Resources {
         *(initialized_resource.into_inner().downcast::<R>().expect("Resources::remove invalid cast"))
     }
 
-    pub fn get<R: Resource>(&self) -> Option<Res<R>> {
+    pub fn get<'a, R: Resource>(&self) -> Option<&'a R> {
         let id = *self.ids.get(&TypeId::of::<R>())?;
         let raw = self.sparse_set.get(id.get())?;
         let val = unsafe { raw.get().as_ref().unwrap_unchecked().downcast_ref_unchecked::<R>() };
-        Some(Res { val })
+        Some(val)
     }
 
-    pub fn get_mut<R: Resource>(&mut self) -> Option<ResMut<R>> {
+    pub fn get_mut<'a, R: Resource>(&mut self) -> Option<&'a mut R> {
         let id = *self.ids.get(&TypeId::of::<R>())?;
         let raw = self.sparse_set.get(id.get())?;
         let val = unsafe { raw.get().as_mut().unwrap_unchecked().downcast_mut_unchecked::<R>() };
-        Some(ResMut { val })
+        Some(val)
     }
 
-    pub fn insert<R: Resource>(&mut self, resource: R) -> Option<R> {
+    pub fn register<R: Resource>(&mut self) -> ResourceId {
         let ids_len = self.ids.len();
         match self.ids.entry(TypeId::of::<R>()) {
             std::collections::hash_map::Entry::Vacant(entry) => {
                 let id = ids_len;
                 entry.insert(ResourceId(id));
-                self.sparse_set.insert(id, Self::initialize_resource(resource)).map(Self::deinitialize_resource)
+                ResourceId(id)
             },
             std::collections::hash_map::Entry::Occupied(entry) => {
-                let id = *entry.get();
-                self.sparse_set.insert(id.get(), Self::initialize_resource(resource)).map(Self::deinitialize_resource)
+                *entry.get()
             },
         }
+    }
+
+    pub fn insert<R: Resource>(&mut self, resource: R) -> Option<R> {
+        let id = self.register::<R>();
+        self.sparse_set.insert(id.get(), Self::initialize_resource(resource)).map(Self::deinitialize_resource)
     }
 
     pub fn remove<R: Resource>(&mut self) -> Option<R> {
@@ -68,9 +71,9 @@ impl Resources {
         self.sparse_set.remove(id.get()) .map(Self::deinitialize_resource)
     }
 
-    pub fn get_or_insert<R: Resource>(&mut self, default: R) -> ResMut<'_, R> {
+    pub fn get_or_insert<'a, 'b: 'a, R: Resource>(&'b mut self, default: R) -> &'a mut R {
         let ids_len = self.ids.len();
-        let val = match self.ids.entry(TypeId::of::<R>()) {
+        match self.ids.entry(TypeId::of::<R>()) {
             std::collections::hash_map::Entry::Vacant(entry) => {
                 let id = ids_len;
                 entry.insert(ResourceId(id));
@@ -82,13 +85,12 @@ impl Resources {
                 let id = entry.get().get();
                 unsafe { self.sparse_set.entry(id).or_insert_with(|| Self::initialize_resource(default)).get_mut().downcast_mut_unchecked::<R>() }
             }
-        };
-        ResMut { val }
+        }
     }
 
-    pub fn get_or_insert_with<R: Resource, F: FnOnce() -> R>(&mut self, f: F) -> ResMut<'_, R> {
+    pub fn get_or_insert_with<'a, 'b: 'a, R: Resource, F: FnOnce() -> R>(&'b mut self, f: F) -> &'a mut R {
         let ids_len = self.ids.len();
-        let val = match self.ids.entry(TypeId::of::<R>()) {
+        match self.ids.entry(TypeId::of::<R>()) {
             std::collections::hash_map::Entry::Vacant(entry) => {
                 let id = ids_len;
                 entry.insert(ResourceId(id));
@@ -100,8 +102,7 @@ impl Resources {
                 let id = entry.get().get();
                 unsafe { self.sparse_set.entry(id).or_insert_with(|| Self::initialize_resource(f())).get_mut().downcast_mut_unchecked::<R>() }
             }
-        };
-        ResMut { val }
+        }
     }
 
     #[inline]
@@ -110,18 +111,16 @@ impl Resources {
     }
 
     #[inline]
-    pub fn get_resource_by_id<R: Resource>(&self, id: ResourceId) -> Option<Res<'_, R>> {
+    pub fn get_resource_by_id<'a, R: Resource>(&self, id: ResourceId) -> Option<&'a R> {
         self.sparse_set.get(id.get()).map(|raw| {
-            let val = unsafe { raw.get().as_ref().unwrap_unchecked().downcast_ref::<R>().expect("Resources::get_resource_by_id invalid cast") };
-            Res { val }
+            unsafe { raw.get().as_ref().unwrap_unchecked().downcast_ref::<R>().expect("Resources::get_resource_by_id invalid cast") }
         })
     }
 
     #[inline]
-    pub fn get_mut_resource_by_id<R: Resource>(&mut self, id: ResourceId) -> Option<ResMut<'_, R>> {
+    pub fn get_resource_by_id_mut<'a, R: Resource>(&mut self, id: ResourceId) -> Option<&'a mut R> {
         self.sparse_set.get(id.get()).map(|raw| {
-            let val = unsafe { raw.get().as_mut().unwrap_unchecked().downcast_mut::<R>().expect("Resources::get_resource_by_id invalid cast") };
-            ResMut { val }
+            unsafe { raw.get().as_mut().unwrap_unchecked().downcast_mut::<R>().expect("Resources::get_resource_by_id invalid cast") }
         })
     }
 }
@@ -138,7 +137,8 @@ impl<R: Resource + Send + Sync> Deref for Res<'_, R> {
 }
 
 pub struct ResMut<'a, R: Resource> {
-    val: &'a mut R
+    val: &'a mut R,
+    was_modified: &'a mut bool,
 }
 
 impl<R: Resource + Send + Sync> Deref for ResMut<'_, R> {
@@ -150,6 +150,7 @@ impl<R: Resource + Send + Sync> Deref for ResMut<'_, R> {
 
 impl<R: Resource + Send + Sync> DerefMut for ResMut<'_, R> {
     fn deref_mut(&mut self) -> &mut Self::Target {
+        *self.was_modified = true;
         self.val
     }
 }
@@ -167,13 +168,15 @@ impl<R: Resource + Send + Sync + 'static> SystemParam for Res<'_, R> {
     }
 
     unsafe fn fetch<'a>(world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: &SystemHandle) -> Self::Item<'a> {
-        unsafe { world_ptr.as_world().resource_by_id::<R>(*state) }
+        let val = unsafe { world_ptr.as_world().resource_by_id::<R>(*state) };
+        Res { val }
     }
 }
 
 impl<R: Resource + Send + Sync + 'static> SystemParam for ResMut<'_, R> {
     type Item<'b> = ResMut<'b, R>;
-    type State = ResourceId;
+    type State = (ResourceId, bool);
+    //                          ^ was_modified
 
     fn join_resource_access(world: &mut World, resource_access: &mut Access) {
         resource_access.mutable.set(world.resource_id::<R>().get());
@@ -181,10 +184,74 @@ impl<R: Resource + Send + Sync + 'static> SystemParam for ResMut<'_, R> {
     }
 
     fn init_state(world: &mut World) -> Self::State {
-        world.resource_id::<R>()
+        (world.resource_id::<R>(), false)
     }
 
     unsafe fn fetch<'a>(mut world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: &SystemHandle) -> Self::Item<'a> {
-        unsafe { world_ptr.as_world_mut().resource_by_id_mut(*state) }
+        let val = unsafe { world_ptr.as_world_mut().resource_by_id_mut::<R>(state.0) };
+        ResMut { val, was_modified: &mut state.1 }
+    }
+
+    fn after<'state>(world: &mut World, state: &'state mut Self::State, _: &mut SystemHandle<'state>) {
+        if state.1 {
+            world.send_event(Changed::<R>(PhantomData));
+            world.send_signal_from_system(Changed::<R>(PhantomData), None);
+            state.1 = false;
+        }
+    }
+}
+
+impl<R: Resource + Send + Sync + 'static> SystemParam for Option<Res<'_, R>> {
+    type Item<'b> = Option<Res<'b, R>>;
+    type State = ResourceId;
+
+    fn join_resource_access(world: &mut World, resource_access: &mut Access) {
+        resource_access.immutable.set(world.resource_id::<R>().get());
+    }
+
+    fn init_state(world: &mut World) -> Self::State {
+        world.register_resource::<R>()
+    }
+
+    unsafe fn fetch<'a>(world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: &SystemHandle) -> Self::Item<'a> {
+        let val = unsafe { world_ptr.as_world().get_resource_by_id::<R>(*state) }?;
+        Some(Res { val })
+    }
+}
+
+impl<R: Resource + Send + Sync + 'static> SystemParam for Option<ResMut<'_, R>> {
+    type Item<'b> = Option<ResMut<'b, R>>;
+    type State = (ResourceId, bool);
+    //                          ^ was_modified
+
+    fn join_resource_access(world: &mut World, resource_access: &mut Access) {
+        resource_access.mutable.set(world.resource_id::<R>().get());
+        resource_access.mutable_count += 1;
+    }
+
+    fn init_state(world: &mut World) -> Self::State {
+        (world.register_resource::<R>(), false)
+    }
+
+    unsafe fn fetch<'a>(mut world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: &SystemHandle) -> Self::Item<'a> {
+        let val = unsafe { world_ptr.as_world_mut().get_resource_by_id_mut::<R>(state.0) }?;
+        Some(ResMut { val, was_modified: &mut state.1 })
+    }
+
+    fn after<'state>(world: &mut World, state: &'state mut Self::State, _: &mut SystemHandle<'state>) {
+        if state.1 {
+            world.send_event(Changed::<R>(PhantomData));
+            world.send_signal_from_system(Changed::<R>(PhantomData), None);
+            state.1 = false;
+        }
+    }
+}
+
+pub struct Changed<T>(PhantomData<T>);
+
+impl<T> Changed<T> {
+    #[inline]
+    pub const fn new() -> Self {
+        Self(PhantomData)
     }
 }

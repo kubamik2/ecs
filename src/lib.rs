@@ -12,11 +12,12 @@ mod signal;
 mod event;
 mod observer;
 mod world;
+#[cfg(test)]
 mod tests;
 mod storage;
 
 pub use component::{ComponentId, Signature};
-pub use world::World;
+pub use world::{World, WorldResMut};
 pub use query::{Query, QueryData};
 pub use resource::{Res, ResMut, ResourceId};
 pub use derive::{Component, Resource, ScheduleLabel};

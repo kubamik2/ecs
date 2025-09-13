@@ -1,6 +1,6 @@
-use std::{any::TypeId, marker::PhantomData, ptr::{self, NonNull}};
+use std::{any::TypeId, marker::PhantomData, ops::{Deref, DerefMut}, ptr::{self, NonNull}};
 
-use crate::{observer::{ObserverInput, Observers, SignalInput}, query::QueryData, resource::ResourceId, schedule::Schedules, system::{IntoSystem, System, SystemId, SYSTEM_IDS}, *};
+use crate::{observer::{ObserverInput, Observers, SignalInput}, query::QueryData, resource::{Changed, ResourceId}, schedule::Schedules, system::{IntoSystem, System, SystemId, SYSTEM_IDS}, *};
 
 static WORLD_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -46,7 +46,7 @@ impl World {
     }
 
     #[inline]
-    pub const fn world_ptr(&self) -> WorldPtr<'_> {
+    pub const fn world_ptr<'a>(&self) -> WorldPtr<'a> {
         WorldPtr {
             ptr: NonNull::new(ptr::from_ref(self).cast_mut()).expect("world pointer cast null"),
             allow_mutable_access: false,
@@ -55,7 +55,7 @@ impl World {
     }
 
     #[inline]
-    pub const fn world_ptr_mut(&mut self) -> WorldPtr<'_> {
+    pub const fn world_ptr_mut<'a>(&mut self) -> WorldPtr<'a> {
         WorldPtr {
             ptr: NonNull::new(ptr::from_mut(self)).expect("world pointer cast null"),
             allow_mutable_access: true,
@@ -86,6 +86,12 @@ impl World {
 
 
     // ===== Resources =====
+    
+
+    #[inline]
+    pub fn register_resource<R: Resource>(&mut self) -> ResourceId {
+        self.resources.register::<R>()
+    }
 
 
     #[inline]
@@ -99,34 +105,78 @@ impl World {
     }
 
     #[inline]
-    pub fn get_resource<R: Resource>(&self) -> Option<Res<'_, R>> {
+    pub fn get_resource<R: Resource>(&self) -> Option<&R> {
         self.resources.get::<R>()
     }
 
     #[inline]
-    pub fn get_resource_mut<R: Resource>(&mut self) -> Option<ResMut<'_, R>> {
-        self.resources.get_mut::<R>()
+    pub fn get_resource_mut<'a, R: Resource>(&mut self) -> Option<WorldResMut<'a, R>> {
+        let mut world_ptr = self.world_ptr_mut();
+        let val = unsafe { world_ptr.as_world_mut() }.resources.get_mut::<R>()?;
+        Some(WorldResMut {
+            val,
+            world_ptr,
+            was_modified: false
+        })
     }
 
     #[inline]
-    pub fn resource<R: Resource>(&self) -> Res<'_, R> {
+    pub(crate) fn get_resource_ref_mut<R: Resource>(&mut self) -> Option<&'_ mut R> {
+        self.resources.get_mut()
+    }
+
+    #[inline]
+    pub fn resource<R: Resource>(&self) -> &R {
         self.resources.get()
             .unwrap_or_else(|| panic!("resource '{}' not initialized", std::any::type_name::<R>()))
     }
 
     #[inline]
-    pub fn resource_mut<R: Resource>(&mut self) -> ResMut<'_, R> {
+    pub fn resource_mut<'a, R: Resource>(&mut self) -> WorldResMut<'a, R> {
+        let mut world_ptr = self.world_ptr_mut();
+        let val = unsafe { world_ptr.as_world_mut() }.resource_ref_mut::<R>();
+        WorldResMut {
+            val,
+            world_ptr,
+            was_modified: false
+        }
+    }
+
+    #[inline]
+    pub(crate) fn resource_ref_mut<R: Resource>(&mut self) -> &mut R {
         self.resources.get_mut()
             .unwrap_or_else(|| panic!("resource '{}' not initialized", std::any::type_name::<R>()))
     }
 
     #[inline]
-    pub fn get_resource_or_insert<R: Resource>(&mut self, default: R) -> ResMut<'_, R> {
+    pub fn get_resource_or_insert<'a, R: Resource>(&mut self, default: R) -> WorldResMut<'a, R> {
+        let mut world_ptr = self.world_ptr_mut();
+        let val = unsafe { world_ptr.as_world_mut() }.resources.get_or_insert(default);
+        WorldResMut {
+            val,
+            world_ptr,
+            was_modified: false
+        }
+    }
+
+    #[inline]
+    pub fn get_resource_or_insert_with<'a, R: Resource, F: FnOnce() -> R>(&mut self, f: F) -> WorldResMut<'a, R> {
+        let mut world_ptr = self.world_ptr_mut();
+        let val = unsafe { world_ptr.as_world_mut() }.resources.get_or_insert_with(f);
+        WorldResMut {
+            val,
+            world_ptr,
+            was_modified: false
+        }
+    }
+
+    #[inline]
+    pub(crate) fn get_resource_ref_or_insert<R: Resource>(&mut self, default: R) -> &mut R {
         self.resources.get_or_insert(default)
     }
 
     #[inline]
-    pub fn get_resource_or_insert_with<R: Resource, F: FnOnce() -> R>(&mut self, f: F) -> ResMut<'_, R> {
+    pub(crate) fn get_resource_ref_or_insert_with<R: Resource, F: FnOnce() -> R>(&mut self, f: F) -> &mut R {
         self.resources.get_or_insert_with(f)
     }
 
@@ -142,24 +192,24 @@ impl World {
     }
 
     #[inline]
-    pub fn get_resource_by_id<R: Resource>(&self, id: ResourceId) -> Option<Res<R>> {
+    pub fn get_resource_by_id<R: Resource>(&self, id: ResourceId) -> Option<&R> {
         self.resources.get_resource_by_id(id)
     }
 
     #[inline]
-    pub fn get_resource_by_id_mut<R: Resource>(&mut self, id: ResourceId) -> Option<ResMut<R>> {
-        self.resources.get_mut_resource_by_id(id)
+    pub fn get_resource_by_id_mut<R: Resource>(&mut self, id: ResourceId) -> Option<&mut R> {
+        self.resources.get_resource_by_id_mut(id)
     }
 
     #[inline]
-    pub fn resource_by_id<R: Resource>(&self, id: ResourceId) -> Res<R> {
+    pub fn resource_by_id<R: Resource>(&self, id: ResourceId) -> &R {
         self.resources.get_resource_by_id(id)
             .unwrap_or_else(|| panic!("resource '{}' not initialized", std::any::type_name::<R>()))
     }
 
     #[inline]
-    pub fn resource_by_id_mut<R: Resource>(&mut self, id: ResourceId) -> ResMut<R> {
-        self.resources.get_mut_resource_by_id(id)
+    pub fn resource_by_id_mut<R: Resource>(&mut self, id: ResourceId) -> &mut R {
+        self.resources.get_resource_by_id_mut(id)
             .unwrap_or_else(|| panic!("resource '{}' not initialized", std::any::type_name::<R>()))
     }
 
@@ -345,7 +395,7 @@ impl World {
 
     #[inline]
     pub fn send_event<E: Event>(&mut self, event: E) {
-        let mut event_queue = self.get_resource_or_insert_with(|| EventQueue::<E>::new());
+        let event_queue = self.get_resource_ref_or_insert_with(|| EventQueue::<E>::new());
         event_queue.send(event);
     }
 
@@ -389,5 +439,35 @@ impl<'a> WorldPtr<'a> {
     #[inline]
     pub const fn demote(&mut self) {
         self.allow_mutable_access = false;
+    }
+}
+
+pub struct WorldResMut<'a, R: Resource> {
+    world_ptr: WorldPtr<'a>,
+    val: &'a mut R,
+    was_modified: bool,
+}
+
+impl<R: Resource> Drop for WorldResMut<'_, R> {
+    fn drop(&mut self) {
+        let world = unsafe { self.world_ptr.as_world_mut() };
+        if self.was_modified {
+            world.send_event(Changed::<R>::new());
+            world.send_signal(Changed::<R>::new(), None);
+        }
+    }
+}
+
+impl<R: Resource> Deref for WorldResMut<'_, R> {
+    type Target = R;
+    fn deref(&self) -> &Self::Target {
+        self.val
+    }
+}
+
+impl<R: Resource> DerefMut for WorldResMut<'_, R> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.was_modified = true;
+        self.val
     }
 }
