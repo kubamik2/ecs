@@ -199,3 +199,41 @@ fn change_detection() {
     schedule.run(&mut world);
     assert!(X.load(Ordering::Relaxed) == 2, "{}", X.load(Ordering::Relaxed));
 }
+
+#[test]
+fn query_filter() {
+    #[derive(Component)]
+    struct A;
+    #[derive(Component)]
+    struct B;
+    #[derive(Component)]
+    struct C;
+    #[derive(Component)]
+    struct D;
+    #[derive(Component)]
+    struct E;
+    let mut world = World::default();
+    let a = world.spawn((A, B, C, D));
+    let b = world.spawn(A);
+    let c = world.spawn(B);
+    let d = world.spawn(C);
+    let e = world.spawn(D);
+
+    assert!(world.query_filtered::<(), With<(A, B, C, D)>>().iter().count() == 1);
+    assert!(world.query_filtered::<(), With<(A, B)>>().iter().count() == 1);
+    assert!(world.query_filtered::<(), With<(C, D)>>().iter().count() == 1);
+    assert!(world.query_filtered::<(), With<(B, C)>>().iter().count() == 1);
+    assert!(world.query_filtered::<(), With<A>>().iter().count() == 2);
+    assert!(world.query_filtered::<(), With<B>>().iter().count() == 2);
+    assert!(world.query_filtered::<(), With<C>>().iter().count() == 2);
+    assert!(world.query_filtered::<(), With<D>>().iter().count() == 2);
+    assert!(world.query_filtered::<(), With<(A, A, B, B)>>().iter().count() == 1);
+    assert!(world.query_filtered::<(), With<E>>().iter().count() == 0);
+    assert!(world.query_filtered::<(), With<(A, E)>>().iter().count() == 0);
+
+    assert!(world.query_filtered::<&A, With<A>>().get(a).is_some());
+    assert!(world.query_filtered::<&A, Without<A>>().iter().count() == 0);
+    assert!(world.query_filtered::<&A, Without<B>>().iter().count() == 1);
+    assert!(world.query_filtered::<&A, Without<B>>().get(b).is_some());
+    assert!(world.query_filtered::<(&A, &B, &C, &D), Without<A>>().iter().count() == 0);
+}

@@ -1,68 +1,75 @@
-use crate::{param::SystemParam, system::SystemHandle, world::WorldPtr, ComponentId, Signature};
-use super::{access::Access, bitmap::Bitmap, Component, Entity, World};
-use std::{any::TypeId, collections::HashSet, mem::MaybeUninit};
+use crate::{param::SystemParam, system::SystemHandle, world::WorldPtr, ComponentBundle, ComponentId, Signature};
+use super::{access::Access, Component, Entity, World};
+use std::{any::TypeId, collections::HashSet, marker::PhantomData, mem::MaybeUninit};
 
 const QUERY_MAX_VARIADIC_COUNT: usize = 32;
 
-pub struct Query<'a, D: QueryData> {
-    _a: std::marker::PhantomData<D>,
+pub struct Query<'a, D: QueryData, F: QueryFilter = ()> {
+    _a: std::marker::PhantomData<(D, F)>,
     world_ptr: WorldPtr<'a>,
-    component_signature: Signature,
+    required_component_signature: Signature,
+    forbidden_component_signature: Signature,
     cached_component_ids: [ComponentId; QUERY_MAX_VARIADIC_COUNT],
 }
 
-impl<D: QueryData> Clone for Query<'_, D> {
+impl<D: QueryData, F: QueryFilter> Clone for Query<'_, D, F> {
     fn clone(&self) -> Self {
         Self {
-            _a: Default::default(),
+            _a: PhantomData,
             world_ptr: self.world_ptr,
-            component_signature: self.component_signature,
+            required_component_signature: self.required_component_signature,
+            forbidden_component_signature: self.forbidden_component_signature,
             cached_component_ids: self.cached_component_ids,
         }
     }
 }
 
-impl<'a, D: QueryData> Query<'a, D> {
+impl<'a, D: QueryData, F: QueryFilter> Query<'a, D, F> {
     pub fn new(world: &'a mut World) -> Self {
         D::register_components(world);
-        let mut component_signature = Bitmap::new();
+        let mut required_component_signature = F::required_component_signature(world);
         let mut component_signature_map = HashSet::new();
         D::join_required_component_signature(&mut component_signature_map);
         for type_id in component_signature_map {
             let signature = world.get_component_signature_by_type_id(&type_id).expect("Query::new component not registered");
-            component_signature |= signature;
+            required_component_signature |= signature;
         }
         let cached_component_ids = D::cache_component_ids(world);
         Self {
             _a: std::marker::PhantomData,
             world_ptr: world.world_ptr_mut(),
-            component_signature,
+            required_component_signature,
+            forbidden_component_signature: F::forbidden_component_signature(world),
             cached_component_ids,
         }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = D::ItemRef<'a>> {
-        let queue_signature = self.component_signature;
+        let required_signature = self.required_component_signature;
+        let forbidden_signature = self.forbidden_component_signature;
         let world_ptr = self.world_ptr;
         unsafe { world_ptr.as_world() }
             .groups()
             .iter()
             .filter(move |(signature, _)| {
                 let signature = **signature;
-                signature & queue_signature == queue_signature
+                (signature & required_signature == required_signature) &&
+                (signature & forbidden_signature).is_zero()
             })
             .flat_map(|(_, entities)| entities.iter().copied())
             .map(|entity| unsafe { D::fetch_ref(self.world_ptr, entity, &self.cached_component_ids) })
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = D::ItemMut<'a>> {
-        let queue_signature = self.component_signature;
+        let required_signature = self.required_component_signature;
+        let forbidden_signature = self.forbidden_component_signature;
         unsafe { self.world_ptr.as_world() }
             .groups()
             .iter()
             .filter(move |(signature, _)| {
                 let signature = **signature;
-                signature & queue_signature == queue_signature
+                (signature & required_signature == required_signature) &&
+                (signature & forbidden_signature).is_zero()
             })
             .flat_map(|(_, entities)| entities.iter().copied())
             .map(|entity| unsafe { D::fetch_mut(self.world_ptr, entity, &self.cached_component_ids) })
@@ -71,13 +78,15 @@ impl<'a, D: QueryData> Query<'a, D> {
     /// # Safety
     /// can violate rust's reference rules
     pub unsafe fn iter_unsafe(&self) -> impl Iterator<Item = D::ItemMut<'a>> {
-        let queue_signature = self.component_signature;
+        let required_signature = self.required_component_signature;
+        let forbidden_signature = self.forbidden_component_signature;
         unsafe { self.world_ptr.as_world() }
             .groups()
             .iter()
             .filter(move |(signature, _)| {
                 let signature = **signature;
-                signature & queue_signature == queue_signature
+                (signature & required_signature == required_signature) &&
+                (signature & forbidden_signature).is_zero()
             })
             .flat_map(|(_, entities)| entities.iter().copied())
             .map(|entity| unsafe { D::fetch_mut(self.world_ptr, entity, &self.cached_component_ids) })
@@ -85,7 +94,9 @@ impl<'a, D: QueryData> Query<'a, D> {
 
     pub fn get(&self, entity: Entity) -> Option<D::ItemRef<'_>> {
         let entity_signature = unsafe { self.world_ptr.as_world() }.get_entity_signature(entity)?;
-        if (entity_signature & self.component_signature) != self.component_signature {
+        if ((entity_signature & self.required_component_signature) != self.required_component_signature) ||
+        !(entity_signature & self.forbidden_component_signature).is_zero()
+        {
             return None;
         }
         Some(unsafe { D::fetch_ref(self.world_ptr, entity, &self.cached_component_ids) })
@@ -93,7 +104,9 @@ impl<'a, D: QueryData> Query<'a, D> {
 
     pub fn get_mut(&mut self, entity: Entity) -> Option<D::ItemMut<'_>> {
         let entity_signature = unsafe { self.world_ptr.as_world() }.get_entity_signature(entity)?;
-        if (entity_signature & self.component_signature) != self.component_signature {
+        if ((entity_signature & self.required_component_signature) != self.required_component_signature) ||
+        !(entity_signature & self.forbidden_component_signature).is_zero()
+        {
             return None;
         }
         Some(unsafe { D::fetch_mut(self.world_ptr, entity, &self.cached_component_ids) })
@@ -104,31 +117,34 @@ impl<'a, D: QueryData> Query<'a, D> {
     /// Might violate rust's reference rules
     pub unsafe fn get_unsafe(&self, entity: Entity) -> Option<D::ItemMut<'_>> {
         let entity_signature = unsafe { self.world_ptr.as_world() }.get_entity_signature(entity)?;
-        if (entity_signature & self.component_signature) != self.component_signature {
+        if ((entity_signature & self.required_component_signature) != self.required_component_signature) ||
+        !(entity_signature & self.forbidden_component_signature).is_zero()
+        {
             return None;
         }
         Some(unsafe { D::fetch_mut(self.world_ptr, entity, &self.cached_component_ids) })
     }
 }
 
-impl<D: QueryData> SystemParam for Query<'_, D> {
-    type Item<'a> = Query<'a, D>;
-    type State = (Signature, [ComponentId; QUERY_MAX_VARIADIC_COUNT]);
+impl<D: QueryData, F: QueryFilter> SystemParam for Query<'_, D, F> {
+    type Item<'a> = Query<'a, D, F>;
+    type State = (Signature, [ComponentId; QUERY_MAX_VARIADIC_COUNT], Signature);
 
     fn join_component_access(world: &mut World, component_access: &mut Access) {
         D::join_component_access(world, component_access);
     }
 
     fn init_state(world: &mut World) -> Self::State {
-        let query = Query::<D>::new(world);
-        (query.component_signature, query.cached_component_ids)
+        let query = Query::<D, F>::new(world);
+        (query.required_component_signature, query.cached_component_ids, query.forbidden_component_signature)
     }
 
     unsafe fn fetch<'a>(world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: &SystemHandle) -> Self::Item<'a> {
         Query {
             _a: Default::default(),
             cached_component_ids: state.1,
-            component_signature: state.0,
+            required_component_signature: state.0,
+            forbidden_component_signature: state.2,
             world_ptr,
         }
     }
@@ -371,3 +387,75 @@ macro_rules! query_tuple_impl {
 }
 
 variadics_please::all_tuples_enumerated!{query_tuple_impl, 1, 32, D}
+
+impl QueryData for () {
+    type ItemRef<'a> = ();
+    type ItemMut<'a> = ();
+    fn register_components(_: &mut World) {}
+    fn cache_component_ids(_: &World) -> [ComponentId; QUERY_MAX_VARIADIC_COUNT] {
+        std::array::from_fn(|_| unsafe { std::mem::transmute(usize::MAX) })
+    }
+    fn join_component_access(_: &mut World, _: &mut Access) {}
+    fn join_component_signature(_: &mut HashSet<TypeId>) {}
+    fn join_required_component_signature(_: &mut HashSet<TypeId>) {}
+    unsafe fn fetch_ref<'a>(_: WorldPtr<'a>, _: Entity, _: &[ComponentId; QUERY_MAX_VARIADIC_COUNT]) -> Self::ItemRef<'a> {}
+    unsafe fn fetch_mut<'a>(_: WorldPtr<'a>, _: Entity, _: &[ComponentId; QUERY_MAX_VARIADIC_COUNT]) -> Self::ItemMut<'a> {}
+}
+
+pub trait QueryFilter {
+    fn required_component_signature(world: &mut World) -> Signature;
+    fn forbidden_component_signature(world: &mut World) -> Signature;
+}
+
+macro_rules! query_filter_impl {
+    ($($name:ident),+) => {
+        impl<$($name: QueryFilter),+> QueryFilter for ($($name),+) {
+            fn required_component_signature(world: &mut World) -> Signature {
+                let mut signature = Signature::new();
+                $(signature |= $name::required_component_signature(world);)+
+                signature
+            }        
+
+            fn forbidden_component_signature(world: &mut World) -> Signature {
+                let mut signature = Signature::new();
+                $(signature |= $name::forbidden_component_signature(world);)+
+                signature
+            }        
+        }
+    }
+}
+
+impl QueryFilter for () {
+    fn required_component_signature(_: &mut World) -> Signature { Signature::new() }
+
+    fn forbidden_component_signature(_: &mut World) -> Signature { Signature::new() }
+}
+
+variadics_please::all_tuples!{query_filter_impl, 2, 32, C}
+
+pub struct With<B: ComponentBundle + 'static>(PhantomData<B>);
+pub struct Without<B: ComponentBundle + 'static>(PhantomData<B>);
+
+impl<B: ComponentBundle + 'static> QueryFilter for With<B> {
+    #[inline]
+    fn required_component_signature(world: &mut World) -> Signature {
+        B::signature(world)
+    }
+
+    #[inline]
+    fn forbidden_component_signature(_: &mut World) -> Signature {
+        Signature::new()
+    }
+}
+
+impl<B: ComponentBundle + 'static> QueryFilter for Without<B> {
+    #[inline]
+    fn required_component_signature(_: &mut World) -> Signature {
+        Signature::new()
+    }
+
+    #[inline]
+    fn forbidden_component_signature(world: &mut World) -> Signature {
+        B::signature(world)
+    }
+}

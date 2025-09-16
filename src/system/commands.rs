@@ -1,4 +1,4 @@
-use crate::{entity::EntityBundle, param::SystemParam, world::WorldPtr, Component, Entity, Event, ScheduleLabel, World};
+use crate::{param::SystemParam, world::WorldPtr, Component, ComponentBundle, Entity, Event, ScheduleLabel, World};
 
 use super::{SystemHandle, SystemId, SYSTEM_IDS};
 
@@ -44,7 +44,7 @@ impl Commands<'_> {
         unsafe { src.copy_to_nonoverlapping(dst, size_of::<T>()) };
     }
 
-    pub fn spawn<B: EntityBundle>(&mut self, bundle: B) {
+    pub fn spawn<B: ComponentBundle>(&mut self, bundle: B) {
         let additional = size_of::<CommandMeta>() + size_of::<B>();
         let index = self.queue.len();
         self.queue.resize(self.queue.len() + additional, 0);

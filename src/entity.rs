@@ -1,6 +1,3 @@
-use crate::bitmap::Bitmap;
-use super::{Component, World};
-
 // -1 accounts for the invalid entity
 pub const MAX_ENTITIES: usize = u16::MAX as usize - 1;
 
@@ -96,37 +93,3 @@ impl Entities {
         self.list[entity.id() as usize] == entity
     }
 }
-
-pub trait EntityBundle {
-    fn spawn(self, world: &mut World) -> Entity;
-}
-
-impl<C: Component + 'static> EntityBundle for C {
-    fn spawn(self, world: &mut World) -> Entity {
-        let signature = world.register_component::<C>().as_signature();
-        unsafe {
-            let entity = world.spawn_with_signature(signature);
-            world.set_component_unchecked(entity, self);
-            entity
-        }
-    }
-}
-
-macro_rules! bundle_typle_impl {
-    ($(($idx:tt, $name:ident)),+) => {
-        impl<$($name: Component + 'static),+> EntityBundle for ($($name),+) {
-            fn spawn(self, world: &mut World) -> Entity {
-                let data = self;
-                let mut signature = Bitmap::new();
-                $(signature |= world.register_component::<$name>().as_signature();)+
-                unsafe {
-                    let entity = world.spawn_with_signature(signature);
-                    $(world.set_component_unchecked(entity, data.$idx));+;
-                    entity
-                }
-            }
-        }
-    }
-}
-
-variadics_please::all_tuples_enumerated!{bundle_typle_impl, 2, 32, C}

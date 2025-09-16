@@ -319,7 +319,7 @@ impl World {
 
 
     #[inline]
-    pub fn spawn<B: entity::EntityBundle>(&mut self, components: B) -> Entity {
+    pub fn spawn<B: component::ComponentBundle>(&mut self, components: B) -> Entity {
         components.spawn(self)
     }
     
@@ -409,7 +409,12 @@ impl World {
     
 
     #[inline]
-    pub fn query<D: QueryData>(&mut self) -> Query<'_, D> {
+    pub fn query<D: QueryData>(&mut self) -> Query<'_, D, ()> {
+        Query::new(self)
+    }
+
+    #[inline]
+    pub fn query_filtered<D: QueryData, F: QueryFilter>(&mut self) -> Query<'_, D, F> {
         Query::new(self)
     }
 }

@@ -247,6 +247,7 @@ impl<R: Resource + Send + Sync + 'static> SystemParam for Option<ResMut<'_, R>> 
     }
 }
 
+#[derive(Default)]
 pub struct Changed<T>(PhantomData<T>);
 
 impl<T> Changed<T> {

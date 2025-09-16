@@ -1,6 +1,6 @@
 use std::{any::TypeId, collections::{hash_map::Entry, HashMap}, ops::BitOrAssign};
 
-use crate::{bitmap::Bitmap, storage::sparse_set::{blob_sparse_set::BlobSparseSet, SparseSet}, Component, Entity};
+use crate::{bitmap::Bitmap, storage::sparse_set::{blob_sparse_set::BlobSparseSet, SparseSet}, Component, Entity, World};
 
 pub type Signature = Bitmap;
 
@@ -203,3 +203,59 @@ impl Components {
         self.entity_signatures.get(entity.id() as usize).copied()
     }
 }
+
+
+pub trait ComponentBundle {
+    fn spawn(self, world: &mut World) -> Entity;
+    fn signature(world: &mut World) -> Signature;
+}
+
+impl<C: Component + 'static> ComponentBundle for C {
+    fn spawn(self, world: &mut World) -> Entity {
+        let signature = world.register_component::<C>().as_signature();
+        unsafe {
+            let entity = world.spawn_with_signature(signature);
+            world.set_component_unchecked(entity, self);
+            entity
+        }
+    }
+
+    fn signature(world: &mut World) -> Signature {
+        world.register_component::<C>().as_signature()
+    }
+}
+
+macro_rules! bundle_typle_impl {
+    ($(($idx:tt, $name:ident)),+) => {
+        impl<$($name: Component + 'static),+> ComponentBundle for ($($name),+) {
+            fn spawn(self, world: &mut World) -> Entity {
+                let data = self;
+                let mut signature = Bitmap::new();
+                $(signature |= world.register_component::<$name>().as_signature();)+
+                unsafe {
+                    let entity = world.spawn_with_signature(signature);
+                    $(world.set_component_unchecked(entity, data.$idx));+;
+                    entity
+                }
+            }
+
+            fn signature(world: &mut World) -> Signature {
+                let mut signature = Signature::new();
+                $(signature |= world.register_component::<$name>().as_signature();)+
+                signature
+            }
+        }
+    }
+}
+
+impl ComponentBundle for () {
+    fn spawn(self, world: &mut World) -> Entity {
+        unsafe { world.spawn_with_signature(Signature::new()) }
+    }
+
+    fn signature(_: &mut World) -> Signature {
+        Signature::new()
+    }
+}
+
+variadics_please::all_tuples_enumerated!{bundle_typle_impl, 2, 32, C}
