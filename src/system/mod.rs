@@ -1,6 +1,6 @@
 mod commands;
 pub use commands::Commands;
-use std::{any::TypeId, marker::PhantomData, sync::RwLock};
+use std::{any::TypeId, marker::PhantomData, ops::{Deref, DerefMut}, sync::RwLock};
 use crate::{entity::Entities, param::SystemParam, world::WorldPtr, Entity};
 
 use super::{access::Access, World};
@@ -323,4 +323,35 @@ impl SystemParam for &SystemHandle<'_> {
         system_meta
     }
     fn init_state(_: &mut World) -> Self::State {}
+}
+
+
+pub struct Local<'a, T: Default + Send + Sync + 'static>(&'a mut T);
+
+impl<T: Default + Send + Sync + 'static> Deref for Local<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
+impl<T: Default + Send + Sync + 'static> DerefMut for Local<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0
+    }
+}
+
+impl<T: Default + Send + Sync + 'static> SystemParam for Local<'_, T> {
+    type Item<'a> = Local<'a, T>;
+    type State = T;
+
+    #[inline]
+    fn init_state(_: &mut World) -> Self::State {
+        T::default()
+    }
+
+    #[inline]
+    unsafe fn fetch<'a>(_: WorldPtr<'a>, state: &'a mut Self::State, _: &'a SystemHandle<'a>) -> Self::Item<'a> {
+        Local(state)
+    }
 }
