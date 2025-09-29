@@ -34,6 +34,7 @@ impl Observers {
         let Some(system_indices) = self.event_to_systems.get(&TypeId::of::<E>()) else { return; }; 
         for mut system_ptr in system_indices.iter().copied() {
             let system = unsafe { system_ptr.as_mut() };
+            if !system.id().is_alive() { continue; }
             if !system.is_init() {
                 system.init(unsafe { world_ptr.as_world_mut() });
             }

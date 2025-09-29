@@ -67,6 +67,7 @@ impl Schedule {
                     for mut system_ptr in bucket.systems.iter().copied() {
                         let system = unsafe { system_ptr.as_mut() };
                         scope.spawn(move |_| {
+                            if !system.id().is_alive() { return; }
                             system.execute(world_ptr, ());
                         });
                     }
@@ -74,6 +75,7 @@ impl Schedule {
             } else {
                 for mut system_ptr in bucket.systems.iter().copied() {
                     let system = unsafe { system_ptr.as_mut() };
+                    if !system.id().is_alive() { continue; }
                     system.execute(world_ptr, ());
                 }
             }

@@ -382,7 +382,6 @@ impl World {
         self.remove_dead_observers();
         let mut world_ptr = self.world_ptr_mut();
         unsafe { world_ptr.as_world_mut() }.observers.send_signal(event, target, world_ptr);
-        self.process_command_buffer();
     }
 
 
