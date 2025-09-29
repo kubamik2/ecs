@@ -79,30 +79,36 @@ impl BlobSparseSet {
     /// # Safety
     /// Type T must be the same as the one used to create the BlobSparseSet
     #[inline]
-    pub unsafe fn insert<T>(&mut self, id: usize, value: T) {
+    pub unsafe fn insert<T>(&mut self, id: usize, mut value: T) -> Option<T> {
         assert!(Layout::new::<T>() == self.dense.item_layout());
-        let ptr = NonNull::from(&value).cast::<u8>();
-        unsafe { self.insert_ptr(id, ptr) };
-        std::mem::forget(value);
+        let ptr = NonNull::from(&mut value).cast::<u8>();
+        let (_, was_present) = unsafe { self.insert_ptr(id, ptr) };
+        match was_present {
+            true => Some(value),
+            false => {
+                std::mem::forget(value);
+                None
+            }
+        }
     }
 
     /// # Safety
     /// ptr must point to a value of type used to create the BlobSparseSet
     /// Value must be properly aligned and valid for reads
     #[inline]
-    pub unsafe fn insert_ptr(&mut self, id: usize, ptr: NonNull<u8>) -> usize {
-        let sparse_index = self.sparse_array.get(id);
+    unsafe fn insert_ptr(&mut self, id: usize, ptr: NonNull<u8>) -> (usize, bool) {
+        let sparse_index = self.sparse_array.get(id); //        ^ was component present
         if let Some(index) = sparse_index.get() {
             let dst = self.dense.index_mut(index).as_ptr();
             let src = ptr.as_ptr();
-            unsafe { dst.copy_from_nonoverlapping(src, self.dense.item_layout().size()) };
-            index
+            unsafe { std::ptr::swap_nonoverlapping(dst, src, self.dense.item_layout().size()) };
+            (index, true)
         } else {
             let index = self.dense.len();
             self.sparse_array.set(id, SparseIndex::new(index));
             unsafe { self.dense.push(ptr) };
             self.mapping.push(id);
-            index
+            (index, false)
         }
     }
 
@@ -110,7 +116,7 @@ impl BlobSparseSet {
     fn insert_with_index<T>(&mut self, id: usize, mut value: T) -> usize {
         assert!(Layout::new::<T>() == self.dense.item_layout());
         let ptr = NonNull::from(&mut value).cast::<u8>();
-        let index = unsafe { self.insert_ptr(id, ptr) };
+        let index = unsafe { self.insert_ptr(id, ptr) }.0;
         std::mem::forget(value);
         index
     }
@@ -131,6 +137,26 @@ impl BlobSparseSet {
 
         self.mapping.pop();
         self.dense.pop()
+    }
+
+    /// # Safety
+    /// Type T must be the same as the one used to crete the BlobSparseSet
+    #[inline]
+    pub unsafe fn remove_as<T>(&mut self, id: usize) -> Option<T> {
+        let sparse_index = self.sparse_array.get(id);
+        let index = sparse_index.get()?;
+
+        let dense_len = self.dense.len();
+        let back = self.mapping[dense_len-1];
+
+        self.dense.swap(index, dense_len-1);
+        self.mapping.swap(index, dense_len-1);
+
+        self.sparse_array.set(back, sparse_index);
+        self.sparse_array.set(id, SparseIndex::NONE);
+
+        self.mapping.pop();
+        unsafe { self.dense.pop_as() }
     }
 
     fn remove_by_index(&mut self, id: usize, index: usize) {

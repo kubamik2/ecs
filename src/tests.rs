@@ -1,4 +1,4 @@
-use crate::{resource::Changed, *};
+use crate::{resource::Changed, world::WorldPtr, *};
 
 #[derive(Component)]
 struct ComponentA {
@@ -215,9 +215,9 @@ fn query_filter() {
     let mut world = World::default();
     let a = world.spawn((A, B, C, D));
     let b = world.spawn(A);
-    let c = world.spawn(B);
-    let d = world.spawn(C);
-    let e = world.spawn(D);
+    let _ = world.spawn(B);
+    let _ = world.spawn(C);
+    let _ = world.spawn(D);
 
     assert!(world.query_filtered::<(), With<(A, B, C, D)>>().iter().count() == 1);
     assert!(world.query_filtered::<(), With<(A, B)>>().iter().count() == 1);
@@ -236,4 +236,125 @@ fn query_filter() {
     assert!(world.query_filtered::<&A, Without<B>>().iter().count() == 1);
     assert!(world.query_filtered::<&A, Without<B>>().get(b).is_some());
     assert!(world.query_filtered::<(&A, &B, &C, &D), Without<A>>().iter().count() == 0);
+}
+
+#[test]
+fn component_hooks() {
+    struct Spawner;
+
+    impl Component for Spawner {
+        fn on_add(&mut self, commands: &mut Commands) {
+            commands.spawn(Position);
+        }
+
+        fn on_remove(&mut self, commands: &mut Commands) {
+            commands.spawn(Rotation);
+        }
+    }
+
+    impl Resource for Spawner {
+        fn on_add(&mut self, commands: &mut Commands) {
+            commands.spawn(Position);
+        }
+
+        fn on_remove(&mut self, commands: &mut Commands) {
+            commands.spawn(Rotation);
+        }
+    }
+
+    #[derive(Component)]
+    struct Position;
+    #[derive(Component)]
+    struct Rotation;
+
+    let mut world = World::default();
+
+    let entity1 = world.spawn(Spawner);
+    let entity2 = world.spawn(Spawner);
+    assert!(world.query::<&Position>().iter().count() == 2);
+    world.despawn(entity1);
+    world.despawn(entity2);
+    assert!(world.query::<&Rotation>().iter().count() == 2);
+
+    world.insert_resource(Spawner);
+    world.insert_resource(Spawner);
+    assert!(world.query::<&Position>().iter().count() == 4);
+    world.remove_resource::<Spawner>();
+    assert!(world.query::<&Rotation>().iter().count() == 4);
+}
+
+#[test]
+fn recurent_commands() {
+    let mut world = World::default();
+    #[derive(ScheduleLabel, PartialEq, Eq, Hash)] struct A;
+    #[derive(ScheduleLabel, PartialEq, Eq, Hash)] struct B;
+    #[derive(ScheduleLabel, PartialEq, Eq, Hash)] struct C;
+    #[derive(ScheduleLabel, PartialEq, Eq, Hash)] struct D;
+    #[derive(ScheduleLabel, PartialEq, Eq, Hash)] struct E;
+    #[derive(ScheduleLabel, PartialEq, Eq, Hash)] struct F;
+    #[derive(ScheduleLabel, PartialEq, Eq, Hash)] struct G;
+    #[derive(ScheduleLabel, PartialEq, Eq, Hash)] struct H;
+    #[derive(ScheduleLabel, PartialEq, Eq, Hash)] struct I;
+    #[derive(ScheduleLabel, PartialEq, Eq, Hash)] struct J;
+
+    #[derive(Resource)] pub struct SuccessA;
+    #[derive(Resource)] pub struct SuccessB;
+    #[derive(Resource)] pub struct SuccessC;
+    #[derive(Resource)] pub struct SuccessD;
+    #[derive(Resource)] pub struct SuccessE;
+    #[derive(Resource)] pub struct SuccessF;
+    #[derive(Resource)] pub struct SuccessG;
+    #[derive(Resource)] pub struct SuccessH;
+    #[derive(Resource)] pub struct SuccessI;
+    #[derive(Resource)] pub struct SuccessJ;
+
+    world.add_system(A, |mut commands: Commands| {commands.run_schedule(B); commands.insert_resource(SuccessA);});
+    world.add_system(B, |mut commands: Commands| {commands.run_schedule(C); commands.insert_resource(SuccessB);});
+    world.add_system(C, |mut commands: Commands| {commands.run_schedule(D); commands.insert_resource(SuccessC);});
+    world.add_system(D, |mut commands: Commands| {commands.run_schedule(E); commands.insert_resource(SuccessD);});
+    world.add_system(E, |mut commands: Commands| {commands.run_schedule(F); commands.insert_resource(SuccessE);});
+    world.add_system(F, |mut commands: Commands| {commands.run_schedule(G); commands.insert_resource(SuccessF);});
+    world.add_system(G, |mut commands: Commands| {commands.run_schedule(H); commands.insert_resource(SuccessG);});
+    world.add_system(H, |mut commands: Commands| {commands.run_schedule(I); commands.insert_resource(SuccessH);});
+    world.add_system(I, |mut commands: Commands| {commands.run_schedule(J); commands.insert_resource(SuccessI);});
+    world.add_system(J, |mut commands: Commands| commands.insert_resource(SuccessJ));
+    
+    world.run_schedule(A);
+
+    assert!(world.get_resource::<SuccessA>().is_some());
+    assert!(world.get_resource::<SuccessB>().is_some());
+    assert!(world.get_resource::<SuccessC>().is_some());
+    assert!(world.get_resource::<SuccessD>().is_some());
+    assert!(world.get_resource::<SuccessE>().is_some());
+    assert!(world.get_resource::<SuccessF>().is_some());
+    assert!(world.get_resource::<SuccessG>().is_some());
+    assert!(world.get_resource::<SuccessH>().is_some());
+    assert!(world.get_resource::<SuccessI>().is_some());
+    assert!(world.get_resource::<SuccessJ>().is_some());
+
+    let mut world = World::default();
+
+    world.add_observer(|_: Signal<A>, mut commands: Commands| {commands.insert_resource(SuccessA); commands.send_signal(B, None);});
+    world.add_observer(|_: Signal<B>, mut commands: Commands| {commands.insert_resource(SuccessB); commands.send_signal(C, None);});
+    world.add_observer(|_: Signal<C>, mut commands: Commands| {commands.insert_resource(SuccessC); commands.send_signal(D, None);});
+    world.add_observer(|_: Signal<D>, mut commands: Commands| {commands.insert_resource(SuccessD); commands.send_signal(E, None);});
+    world.add_observer(|_: Signal<E>, mut commands: Commands| {commands.insert_resource(SuccessE); commands.send_signal(F, None);});
+    world.add_observer(|_: Signal<F>, mut commands: Commands| {commands.insert_resource(SuccessF); commands.send_signal(G, None);});
+    world.add_observer(|_: Signal<G>, mut commands: Commands| {commands.insert_resource(SuccessG); commands.send_signal(H, None);});
+    world.add_observer(|_: Signal<H>, mut commands: Commands| {commands.insert_resource(SuccessH); commands.send_signal(I, None);});
+    world.add_observer(|_: Signal<I>, mut commands: Commands| {commands.insert_resource(SuccessI); commands.send_signal(J, None);});
+    world.add_observer(|_: Signal<J>, mut commands: Commands| {commands.insert_resource(SuccessJ);});
+
+    world.send_signal(A, None);
+
+    assert!(world.get_resource::<SuccessA>().is_some());
+    assert!(world.get_resource::<SuccessB>().is_some());
+    assert!(world.get_resource::<SuccessC>().is_some());
+    assert!(world.get_resource::<SuccessD>().is_some());
+    assert!(world.get_resource::<SuccessE>().is_some());
+    assert!(world.get_resource::<SuccessF>().is_some());
+    assert!(world.get_resource::<SuccessG>().is_some());
+    assert!(world.get_resource::<SuccessH>().is_some());
+    assert!(world.get_resource::<SuccessI>().is_some());
+    assert!(world.get_resource::<SuccessJ>().is_some());
 }

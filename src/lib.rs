@@ -16,10 +16,10 @@ mod world;
 mod tests;
 mod storage;
 
-pub use component::{ComponentId, Signature, ComponentBundle};
+pub use component::{ComponentId, Signature, ComponentBundle, Component};
 pub use world::{World, WorldResMut};
 pub use query::{Query, QueryData, Without, With, QueryFilter};
-pub use resource::{Res, ResMut, ResourceId, Changed};
+pub use resource::{Res, ResMut, ResourceId, Changed, Resource};
 pub use derive::{Component, Resource, ScheduleLabel};
 pub use schedule::{Schedule, ScheduleLabel};
 pub use system::{Commands, SystemHandle, SystemInput, IntoSystem, SystemId, Local};
@@ -27,6 +27,3 @@ pub use signal::Signal;
 pub use event::{Event, EventReader, EventReadWriter, EventQueue, EventReaderState};
 pub use entity::Entity;
 pub use observer::{ObserverInput, SignalInput};
-
-pub trait Component: Send + Sync + 'static {}
-pub trait Resource: Send + Sync + 'static {}

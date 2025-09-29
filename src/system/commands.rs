@@ -1,4 +1,4 @@
-use crate::{param::SystemParam, world::WorldPtr, Component, ComponentBundle, Entity, Event, ScheduleLabel, World};
+use crate::{Component, ComponentBundle, Entity, Event, IntoSystem, ObserverInput, Resource, ScheduleLabel, SignalInput, SystemInput, World, param::SystemParam, world::WorldPtr};
 
 use super::{SystemHandle, SystemId, SYSTEM_IDS};
 
@@ -32,7 +32,29 @@ enum CommandMeta {
     RunSchedule {
         f: fn(&mut World, *mut u8),
         data_size: usize,
-    }
+    },
+    InsertResource {
+        f: fn(&mut World, *mut u8),
+        data_size: usize,
+    },
+    RemoveResource {
+        f: fn(&mut World),
+    },
+    AddSystem {
+        f: fn(&mut World, *mut u8, *mut u8, SystemId),
+        label_data_size: usize,
+        system_data_size: usize,
+        system_id: SystemId,
+    },
+    AddObserver {
+        f: fn(&mut World, *mut u8, SystemId),
+        data_size: usize,
+        system_id: SystemId,
+    },
+    SendEvent {
+        f: fn(&mut World, *mut u8),
+        data_size: usize,
+    },
 }
 
 impl Commands<'_> {
@@ -158,9 +180,114 @@ impl Commands<'_> {
         };
 
         self.copy_data(&command_meta, index);
-        self.copy_data(&label, index + size_of::<L>());
+        self.copy_data(&label, index + size_of::<CommandMeta>());
+
+        std::mem::forget(label);
     }
 
+    pub fn insert_resource<R: Resource>(&mut self, resource: R) {
+        let additional = size_of::<CommandMeta>() + size_of::<R>();
+        let index = self.queue.len();
+        self.queue.resize(self.queue.len() + additional, 0);
+
+        let command_meta = CommandMeta::InsertResource {
+            f: |world, data| {
+                let data = data as *mut R;
+                let resource = unsafe { data.read_unaligned() };
+                world.insert_resource(resource);
+            },
+            data_size: size_of::<R>(),
+        };
+
+        self.copy_data(&command_meta, index);
+        self.copy_data(&resource, index + size_of::<CommandMeta>());
+
+        std::mem::forget(resource);
+    }
+
+    pub fn remove_resource<R: Resource>(&mut self) {
+        let additional = size_of::<CommandMeta>();
+        let index = self.queue.len();
+        self.queue.resize(self.queue.len() + additional, 0);
+
+        let command_meta = CommandMeta::RemoveResource {
+            f: |world| {
+                world.remove_resource::<R>();
+            },
+        };
+
+        self.copy_data(&command_meta, index);
+    }
+
+    pub fn add_system<L: ScheduleLabel, ParamIn: SystemInput, S: IntoSystem<ParamIn, ()> + 'static>(&mut self, label: L, system: S) -> SystemId {
+        let additional = size_of::<CommandMeta>() + size_of::<L>() + size_of::<S>();
+        let index = self.queue.len();
+        self.queue.resize(self.queue.len() + additional, 0);
+        let system_id = SystemId(SYSTEM_IDS.write().unwrap().spawn());
+        
+        let command_meta = CommandMeta::AddSystem {
+            f: |world, label_data, system_data, system_id| {
+                let label = unsafe { (label_data as *mut L).read_unaligned() };
+                let system = unsafe { (system_data as *mut S).read_unaligned() };
+                world.add_system_with_id(label, system, system_id);
+            },
+            label_data_size: size_of::<L>(),
+            system_data_size: size_of::<S>(),
+            system_id,
+        };
+
+        self.copy_data(&command_meta, index);
+        self.copy_data(&label, index + size_of::<CommandMeta>());
+        self.copy_data(&system, index + size_of::<CommandMeta>() + size_of::<L>());
+
+        std::mem::forget(label);
+        std::mem::forget(system);
+        system_id
+    }
+
+    pub fn add_observer<ParamIn: ObserverInput, S: IntoSystem<ParamIn, SignalInput> + 'static>(&mut self, system: S) -> SystemId {
+        let additional = size_of::<CommandMeta>() + size_of::<S>();
+        let index = self.queue.len();
+        self.queue.resize(self.queue.len() + additional, 0);
+        let system_id = SystemId(SYSTEM_IDS.write().unwrap().spawn());
+        
+        let command_meta = CommandMeta::AddObserver {
+            f: |world, data, system_id| {
+                let system = unsafe { (data as *mut S).read_unaligned() };
+                world.add_observer_with_id(system, system_id);
+            },
+            data_size: size_of::<S>(),
+            system_id,
+        };
+
+        self.copy_data(&command_meta, index);
+        self.copy_data(&system, index + size_of::<CommandMeta>() );
+
+        std::mem::forget(system);
+        system_id
+    }
+
+    pub fn send_event<E: Event>(&mut self, event: E) {
+        let additional = size_of::<CommandMeta>() + size_of::<E>();
+        let index = self.queue.len();
+        self.queue.resize(self.queue.len() + additional, 0);
+
+        let command_meta = CommandMeta::SendEvent {
+            f: |world, data| {
+                let data = data as *mut E;
+                let event = unsafe { data.read_unaligned() };
+                world.send_event(event);
+            },
+            data_size: size_of::<E>(),
+        };
+
+        self.copy_data(&command_meta, index);
+        self.copy_data(&event, index + size_of::<CommandMeta>());
+
+        std::mem::forget(event);
+    }
+
+    #[inline]
     unsafe fn read_command_meta(&self, index: usize) -> CommandMeta {
         use std::ptr::NonNull;
         let ptr = NonNull::from(&self.queue[index]).cast::<CommandMeta>();
@@ -197,9 +324,33 @@ impl Commands<'_> {
                     cursor += data_size;
                 },
                 CommandMeta::RemoveSystem { id } => {
-                    SYSTEM_IDS.write().unwrap().despawn(id.get());
+                    world.remove_system(id);
                 },
                 CommandMeta::RunSchedule { f, data_size } => {
+                    let ptr = unsafe { (&mut self.queue[0] as *mut u8).add(cursor) };
+                    (f)(world, ptr);
+                    cursor += data_size;
+                },
+                CommandMeta::InsertResource { f, data_size } => {
+                    let ptr = unsafe { (&mut self.queue[0] as *mut u8).add(cursor) };
+                    (f)(world, ptr);
+                    cursor += data_size;
+                },
+                CommandMeta::RemoveResource { f } => {
+                    (f)(world);
+                },
+                CommandMeta::AddSystem { f, label_data_size, system_data_size, system_id } => {
+                    let label_data = unsafe { (&mut self.queue[0] as *mut u8).add(cursor) };
+                    let system_data = unsafe { (&mut self.queue[0] as *mut u8).add(cursor + label_data_size) };
+                    (f)(world, label_data, system_data, system_id);
+                    cursor += label_data_size + system_data_size;
+                },
+                CommandMeta::AddObserver { f, data_size, system_id } => {
+                    let ptr = unsafe { (&mut self.queue[0] as *mut u8).add(cursor) };
+                    (f)(world, ptr, system_id);
+                    cursor += data_size;
+                },
+                CommandMeta::SendEvent { f, data_size } => {
                     let ptr = unsafe { (&mut self.queue[0] as *mut u8).add(cursor) };
                     (f)(world, ptr);
                     cursor += data_size;
@@ -207,6 +358,15 @@ impl Commands<'_> {
             }
         }
         self.queue.clear();
+    }
+
+    pub(crate) fn join<'a>(&'a mut self, other: Commands<'a>) {
+        self.queue.extend(other.queue.iter());
+    }
+
+    #[inline]
+    pub(crate) const fn new<'a>(buffer: &'a mut Vec<u8>) -> Commands<'a> {
+        Commands { queue: buffer }
     }
 }
 
@@ -224,10 +384,8 @@ impl SystemParam for Commands<'_> {
         }
     }
 
-    fn after(world: &mut World, state: &mut Self::State, _: &mut SystemHandle) {
-        let mut commands = Commands {
-            queue: state,
-        };
-        commands.process(world);
+    fn after(commands: &mut Commands, state: &mut Self::State) {
+        commands.join(Commands { queue: state });
+        *state = Vec::new();
     }
 }

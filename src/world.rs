@@ -1,6 +1,6 @@
 use std::{any::TypeId, marker::PhantomData, ops::{Deref, DerefMut}, ptr::{self, NonNull}};
 
-use crate::{observer::{ObserverInput, Observers, SignalInput}, query::QueryData, resource::{Changed, ResourceId}, schedule::Schedules, system::{IntoSystem, System, SystemId, SYSTEM_IDS}, *};
+use crate::{observer::{ObserverInput, Observers, SignalInput}, query::QueryData, resource::{Changed, ResourceId}, schedule::Schedules, system::{IntoSystem, SystemId, SYSTEM_IDS, System}, *};
 
 static WORLD_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -15,6 +15,7 @@ pub struct World {
     observers: Observers,
     schedules: Schedules,
     pub(crate) thread_pool: rayon::ThreadPool,
+    command_buffer: Vec<u8>,
 }
 
 impl Default for World {
@@ -31,12 +32,12 @@ impl World {
     pub fn new(num_threads: usize) -> Result<Self, rayon::ThreadPoolBuildError> {
         Ok(Self {
             id: WorldId(WORLD_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
-            components: Default::default(),
-            entity_manager: Default::default(),
+            components: Default::default(), entity_manager: Default::default(),
             resources: Default::default(),
             observers: Default::default(),
             schedules: Schedules::default(),
-            thread_pool: rayon::ThreadPoolBuilder::new().use_current_thread().num_threads(num_threads).build()?,
+            thread_pool: rayon::ThreadPoolBuilder::new().num_threads(num_threads).build()?,
+            command_buffer: Vec::new(),
         })
     }
 
@@ -93,15 +94,30 @@ impl World {
         self.resources.register::<R>()
     }
 
-
     #[inline]
-    pub fn insert_resource<R: Resource>(&mut self, resource: R) -> Option<R> {
-        self.resources.insert(resource)
+    pub fn insert_resource<R: Resource>(&mut self, mut resource: R) -> Option<R> {
+        resource.on_add(&mut self.command_buffer());
+        match self.resources.insert(resource) {
+            Some(mut res) => {
+                res.on_remove(&mut self.command_buffer());
+                self.process_command_buffer();
+                Some(res)
+            },
+            None => {
+                self.process_command_buffer();
+                None
+            }
+        }
     }
 
     #[inline]
     pub fn remove_resource<R: Resource>(&mut self) -> Option<R> {
-        self.resources.remove()
+        if let Some(mut res) = self.resources.remove::<R>() {
+            res.on_remove(&mut self.command_buffer());
+            self.process_command_buffer();
+            return Some(res);
+        }
+        None
     }
 
     #[inline]
@@ -149,35 +165,31 @@ impl World {
     }
 
     #[inline]
-    pub fn get_resource_or_insert<'a, R: Resource>(&mut self, default: R) -> WorldResMut<'a, R> {
-        let mut world_ptr = self.world_ptr_mut();
-        let val = unsafe { world_ptr.as_world_mut() }.resources.get_or_insert(default);
-        WorldResMut {
-            val,
-            world_ptr,
-            was_modified: false
-        }
-    }
-
-    #[inline]
     pub fn get_resource_or_insert_with<'a, R: Resource, F: FnOnce() -> R>(&mut self, f: F) -> WorldResMut<'a, R> {
         let mut world_ptr = self.world_ptr_mut();
-        let val = unsafe { world_ptr.as_world_mut() }.resources.get_or_insert_with(f);
+        let mut commands = self.command_buffer();
+        let val = unsafe { world_ptr.as_world_mut() }.resources.get_or_insert_with(|| {
+            let mut resource = f();
+            resource.on_add(&mut commands);
+            resource
+        });
+        self.process_command_buffer();
         WorldResMut {
             val,
             world_ptr,
             was_modified: false
         }
-    }
-
-    #[inline]
-    pub(crate) fn get_resource_ref_or_insert<R: Resource>(&mut self, default: R) -> &mut R {
-        self.resources.get_or_insert(default)
     }
 
     #[inline]
     pub(crate) fn get_resource_ref_or_insert_with<R: Resource, F: FnOnce() -> R>(&mut self, f: F) -> &mut R {
-        self.resources.get_or_insert_with(f)
+        let mut world_ptr = self.world_ptr_mut();
+        let mut commands = self.command_buffer();
+        unsafe { world_ptr.as_world_mut() }.resources.get_or_insert_with(|| {
+            let mut resource = f();
+            resource.on_add(&mut commands);
+            resource
+        })
     }
 
     #[inline]
@@ -223,22 +235,33 @@ impl World {
     }
 
     #[inline]
-    pub fn set_component<C: Component>(&mut self, entity: Entity, component: C) {
+    pub fn set_component<C: Component>(&mut self, entity: Entity, mut component: C) {
         if !self.is_alive(entity) { return; }
-        self.components.set_component(entity, component);
+        component.on_add(&mut self.command_buffer());
+        if let Some(mut component) = self.components.set_component(entity, component) {
+            component.on_remove(&mut self.command_buffer());
+        }
+        self.process_command_buffer();
     }
 
     /// # Safety
     /// Caller must ensure that the entity is alive and the given component exists
     #[inline]
-    pub(crate) unsafe fn set_component_unchecked<C: Component>(&mut self, entity: Entity, component: C) {
-        unsafe { self.components.set_component_unchecked(entity, component) };
+    pub(crate) unsafe fn set_component_unchecked<C: Component>(&mut self, entity: Entity, mut component: C) {
+        component.on_add(&mut self.command_buffer());
+        if let Some(mut component) = unsafe { self.components.set_component_unchecked(entity, component) } {
+            component.on_remove(&mut self.command_buffer());
+        }
+        self.process_command_buffer();
     }
 
     #[inline]
     pub fn remove_component<C: Component>(&mut self, entity: Entity) {
         if !self.is_alive(entity) { return; }
-        self.components.remove_component::<C>(entity);
+        if let Some(mut component) = self.components.remove_component::<C>(entity) {
+            component.on_remove(&mut self.command_buffer());
+        }
+        self.process_command_buffer();
     }
 
     #[inline]
@@ -335,8 +358,10 @@ impl World {
     pub fn despawn(&mut self, entity: Entity) {
         if self.entity_manager.is_alive(entity) {
             self.entity_manager.despawn(entity);
-            self.components.despawn(entity);
+            let mut world_ptr = self.world_ptr_mut();
+            self.components.despawn(entity, unsafe { world_ptr.as_world_mut() }.command_buffer());
         }
+        self.process_command_buffer();
     }
 
     #[inline]
@@ -357,17 +382,22 @@ impl World {
         self.remove_dead_observers();
         let mut world_ptr = self.world_ptr_mut();
         unsafe { world_ptr.as_world_mut() }.observers.send_signal(event, target, world_ptr);
+        self.process_command_buffer();
     }
+
 
     // ===== Observers =====
 
 
+    #[inline]
     pub fn add_observer<ParamIn: ObserverInput, S: IntoSystem<ParamIn, SignalInput> + 'static>(&mut self, system: S) -> SystemId {
-        let mut system: Box<dyn System<Input = SignalInput> + Send + Sync> = Box::new(system.into_system());
-        let id = system.id();
-        system.init(self);
-        self.observers.add_boxed_observer(system);
-        id
+        self.observers.add_observer(system)
+    }
+
+    #[inline]
+    pub fn add_observer_with_id<ParamIn: ObserverInput, S: IntoSystem<ParamIn, SignalInput> + 'static>(&mut self, system: S, id: SystemId) {
+        let boxed_system = Box::new(system.into_system_with_id(id));
+        self.observers.add_boxed_observer(boxed_system);
     }
 
     #[inline]
@@ -375,18 +405,32 @@ impl World {
         self.observers.remove_dead_observers();
     }
 
+
     // ===== Systems =====
 
 
     #[inline]
     pub fn remove_system(&self, system_id: SystemId) {
-        SYSTEM_IDS.write().unwrap().despawn(system_id.get());
+        let mut system_ids = SYSTEM_IDS.write().unwrap();
+        if system_ids.is_alive(system_id.get()) {
+            system_ids.despawn(system_id.get());
+        }
     }
 
     #[inline]
-    pub fn add_system<L: ScheduleLabel, ParamIn: SystemInput, S: IntoSystem<ParamIn, ()> + 'static>(&mut self, label: L, system: S) {
+    pub fn add_system<L: ScheduleLabel, ParamIn: SystemInput, S: IntoSystem<ParamIn, ()> + 'static>(&mut self, label: L, system: S) -> SystemId {
         let schedule = self.schedules.get_or_default(label);
-        schedule.add_system(system);
+        let boxed_system = Box::new(system.into_system());
+        let id = boxed_system.id();
+        schedule.add_boxed_system(boxed_system);
+        id
+    }
+
+    #[inline]
+    pub(crate) fn add_system_with_id<L: ScheduleLabel, ParamIn: SystemInput, S: IntoSystem<ParamIn, ()> + 'static>(&mut self, label: L, system: S, id: SystemId) {
+        let schedule = self.schedules.get_or_default(label);
+        let boxed_system = Box::new(system.into_system_with_id(id));
+        schedule.add_boxed_system(boxed_system);
     }
 
 
@@ -417,6 +461,19 @@ impl World {
     pub fn query_filtered<D: QueryData, F: QueryFilter>(&mut self) -> Query<'_, D, F> {
         Query::new(self)
     }
+
+    #[inline]
+    pub(crate) const fn command_buffer(&mut self) -> Commands<'_> {
+        Commands::new(&mut self.command_buffer)
+    }
+
+    #[inline]
+    pub(crate) fn process_command_buffer(&mut self) {
+        let mut queue = Vec::new();
+        std::mem::swap(&mut queue, &mut self.command_buffer);
+        let mut commands = Commands::new(&mut queue);
+        commands.process(self);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -431,12 +488,12 @@ unsafe impl Send for WorldPtr<'_> {}
 
 impl<'a> WorldPtr<'a> {
     #[inline]
-    pub unsafe fn as_world(&self) -> &'a World {
+    pub const unsafe fn as_world(&self) -> &'a World {
         unsafe { self.ptr.as_ref() }
     }
 
     #[inline]
-    pub unsafe fn as_world_mut(&mut self) -> &'a mut World {
+    pub const unsafe fn as_world_mut(&mut self) -> &'a mut World {
         debug_assert!(self.allow_mutable_access);
         unsafe { self.ptr.as_mut() }
     }

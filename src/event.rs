@@ -57,7 +57,7 @@ pub struct EventReader<'a, E: Event> {
 }
 
 impl<E: Event> EventReader<'_, E> {
-    pub fn read(&mut self) -> EventIterator<E> {
+    pub fn read(&mut self) -> EventIterator<'_, E> {
         EventIterator::new(self.event_queue, self.last_count)
     }
 }
@@ -88,7 +88,7 @@ pub struct EventReadWriter<'a, E: Event> {
 }
 
 impl<E: Event> EventReadWriter<'_, E> {
-    pub fn read(&mut self) -> EventIterator<E> {
+    pub fn read(&mut self) -> EventIterator<'_, E> {
         EventIterator::new(self.event_queue, self.last_count)
     }
 

@@ -32,7 +32,8 @@ pub trait System {
     fn resource_access(&self) -> &Access;
     fn signal_access(&self) -> Option<&TypeId>;
     fn init(&mut self, world: &mut World);
-    fn after(&mut self, world: &mut World);
+    fn is_init(&self) -> bool;
+    fn after(&mut self, commands: Commands);
 }
 
 pub struct FunctionSystem<ParamIn, Input, F: SystemFunc<ParamIn, Input>> {
@@ -42,6 +43,7 @@ pub struct FunctionSystem<ParamIn, Input, F: SystemFunc<ParamIn, Input>> {
     component_access: Option<Access>,
     resource_access: Option<Access>,
     signal_access: Option<TypeId>,
+    is_init: bool,
     func: F,
     _a: std::marker::PhantomData<ParamIn>,
 }
@@ -102,22 +104,23 @@ impl<Input, ParamIn, F: SystemFunc<ParamIn, Input>> System for FunctionSystem<Pa
         self.component_access = Some(component_access);
         self.resource_access = Some(resource_access);
         self.validate();
+        self.is_init = true;
     }
 
     #[inline]
-    fn after(&mut self, world: &mut World) {
+    fn after(&mut self, commands: Commands) {
         let name = self.name;
         let state = self.state.as_mut().unwrap_or_else(|| panic!("system '{}' has been executed without initialization", name));
-        let system_meta = SystemHandle {
-            id: self.id,
-            _m: PhantomData,
-        };
-        F::after(world, state, system_meta);   
+        F::after(commands, state);   
     }
 
     #[inline]
     fn id(&self) -> SystemId {
         self.id
+    }
+
+    fn is_init(&self) -> bool {
+        self.is_init
     }
 }
 
@@ -128,7 +131,7 @@ pub trait SystemFunc<ParamIn, Input> {
     fn join_resource_access(world: &mut World, resource_access: &mut Access);
     fn signal_access() -> Option<TypeId>;
     fn init_state(world: &mut World) -> Self::State;
-    fn after<'state>(world: &mut World, state: &'state mut Self::State, system_meta: SystemHandle<'state>);
+    fn after<'state>(commands: Commands<'state>, state: &'state mut Self::State);
 }
 
 impl<F, Input> SystemFunc<(), Input> for F where 
@@ -163,7 +166,7 @@ impl<F, Input> SystemFunc<(), Input> for F where
     #[inline]
     fn init_state(_: &mut World) -> Self::State {}
     #[inline]
-    fn after(_: &mut World, _: &mut Self::State, _: SystemHandle) {}
+    fn after(_: Commands, _: &mut Self::State) {}
 }
 
 impl<F, ParamIn, Input> SystemFunc<ParamIn, Input> for F where 
@@ -209,8 +212,8 @@ impl<F, ParamIn, Input> SystemFunc<ParamIn, Input> for F where
     }
 
     #[inline]
-    fn after<'a>(world: &'a mut World, state: &'a mut Self::State, mut system_meta: SystemHandle<'a>) {
-        ParamIn::after(world, state, &mut system_meta);
+    fn after<'a>(mut commands: Commands<'a>, state: &'a mut Self::State) {
+        ParamIn::after(&mut commands, state);
     }
 }
 
@@ -256,8 +259,8 @@ macro_rules! system_func_impl {
                 None
             }
 
-            fn after<'state>(world: &mut World, state: &'state mut Self::State, mut system_meta: SystemHandle<'state>) {
-                $($param::after(world, &mut state.$i, &mut system_meta);)+
+            fn after<'state>(mut commands: Commands<'state>, state: &'state mut Self::State) {
+                $($param::after(&mut commands, &mut state.$i);)+
             }
         }
     }
@@ -268,6 +271,7 @@ variadics_please::all_tuples_enumerated!{system_func_impl, 2, 32, In, p}
 pub trait IntoSystem<ParamIn, Input> {
     type System: System<Input = Input> + Send + Sync + 'static;
     fn into_system(self) -> Self::System;
+    fn into_system_with_id(self, id: SystemId) -> Self::System;
 }
 
 impl<ParamIn, F, Input> IntoSystem<ParamIn, Input> for F
@@ -285,6 +289,21 @@ where
             component_access: None,
             resource_access: None,
             signal_access: F::signal_access(),
+            is_init: false,
+            func: self,
+            _a: Default::default(),
+        }
+    }
+
+    fn into_system_with_id(self, id: SystemId) -> Self::System {
+        FunctionSystem {
+            id,
+            name: self.name(),
+            state: None,
+            component_access: None,
+            resource_access: None,
+            signal_access: F::signal_access(),
+            is_init: false,
             func: self,
             _a: Default::default(),
         }

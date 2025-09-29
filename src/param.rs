@@ -1,6 +1,6 @@
 use std::any::TypeId;
 
-use crate::{system::SystemHandle, world::WorldPtr};
+use crate::{Commands, system::SystemHandle, world::WorldPtr};
 
 use super::{access::Access, World};
 
@@ -17,5 +17,5 @@ pub trait SystemParam {
     /// # Safety
     /// The caller must not modify the world such that it would cause a data race
     unsafe fn fetch<'a>(world_ptr: WorldPtr<'a>, state: &'a mut Self::State, system_meta: &'a SystemHandle<'a>) -> Self::Item<'a>;
-    fn after<'state>(world: &mut World, state: &'state mut Self::State, system_meta: &mut SystemHandle<'state>) {}
+    fn after<'state>(commands: &mut Commands<'state>, state: &'state mut Self::State) {}
 }

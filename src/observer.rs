@@ -1,4 +1,4 @@
-use crate::{access::Access, param::SystemParam, signal::Signal, system::{System, SystemFunc, SystemHandle, SYSTEM_IDS}, world::WorldPtr, Entity, Event, World};
+use crate::{access::Access, param::SystemParam, signal::Signal, system::{System, SystemFunc, SystemHandle, SYSTEM_IDS, Commands}, world::WorldPtr, Entity, Event, IntoSystem, SystemId, World};
 use std::{any::TypeId, collections::HashMap, ptr::NonNull};
 
 #[derive(Default)]
@@ -8,10 +8,21 @@ pub struct Observers {
 }
 
 impl Observers {
-    pub(crate) fn add_boxed_observer(&mut self, mut system: Box<dyn System<Input = SignalInput> + Send + Sync>) {
+    pub(crate) fn add_observer<ParamIn: ObserverInput, S: IntoSystem<ParamIn, SignalInput> + 'static>(&mut self, system: S) -> SystemId {
+        let mut system: Box<dyn System<Input = SignalInput> + Send + Sync> = Box::new(system.into_system());
         let event_type_id = *system.signal_access().expect("observer does not have signal access");
+        let system_id = system.id();
         self.event_to_systems.entry(event_type_id).or_default().push(NonNull::from(system.as_mut()));
         self.systems.push(system);
+        system_id
+    }
+
+    pub(crate) fn add_boxed_observer<S: System<Input = SignalInput> + Send + Sync + 'static>(&mut self, mut system: Box<S>) -> SystemId {
+        let event_type_id = *system.signal_access().expect("observer does not have signal access");
+        let system_id = system.id();
+        self.event_to_systems.entry(event_type_id).or_default().push(NonNull::from(system.as_mut()));
+        self.systems.push(system);
+        system_id
     }
 
     pub(crate) fn send_signal<E: Event>(&mut self, mut event: E, target: Option<Entity>, mut world_ptr: WorldPtr<'_>) {
@@ -23,9 +34,13 @@ impl Observers {
         let Some(system_indices) = self.event_to_systems.get(&TypeId::of::<E>()) else { return; }; 
         for mut system_ptr in system_indices.iter().copied() {
             let system = unsafe { system_ptr.as_mut() };
+            if !system.is_init() {
+                system.init(unsafe { world_ptr.as_world_mut() });
+            }
             system.execute(world_ptr, signal_input);
-            system.after(unsafe { world_ptr.as_world_mut() });
+            system.after(unsafe { world_ptr.as_world_mut() }.command_buffer());
         }
+        unsafe { world_ptr.as_world_mut() }.process_command_buffer();
     }
 
     pub(crate) fn remove_dead_observers(&mut self) {
@@ -113,8 +128,8 @@ macro_rules! observer_func_impl {
                 Some(TypeId::of::<E>())
             }
 
-            fn after<'state>(world: &mut World, state: &'state mut Self::State, mut system_meta: SystemHandle<'state>) {
-                $($param::after(world, &mut state.$i, &mut system_meta);)+
+            fn after<'state>(mut commands: Commands<'state>, state: &'state mut Self::State) {
+                $($param::after(&mut commands, &mut state.$i);)+
             }
         }
     }
@@ -161,8 +176,8 @@ impl<E: Event, F, In> SystemFunc<(Signal<'_, E>, In), SignalInput> for F where
         Some(TypeId::of::<E>())
     }
 
-    fn after<'state>(world: &mut World, state: &'state mut Self::State, mut system_meta: SystemHandle<'state>) {
-        In::after(world, state, &mut system_meta);
+    fn after<'state>(mut commands: Commands<'state>, state: &'state mut Self::State) {
+        In::after(&mut commands, state);
     }
 }
 
@@ -193,5 +208,5 @@ impl<E: Event, F> SystemFunc<Signal<'_, E>, SignalInput> for F where
         Some(TypeId::of::<E>())
     }
 
-    fn after(_: &mut World, _: &mut Self::State, _: SystemHandle) {}
+    fn after(_: Commands, _: &mut Self::State) {}
 }

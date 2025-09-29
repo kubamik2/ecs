@@ -26,6 +26,10 @@ impl Schedule {
         id
     }
 
+    pub(crate) fn add_boxed_system<S: crate::system::System<Input = ()> + Send + Sync + 'static>(&mut self, system: Box<S>) {
+        self.init_queue.push(system);
+    }
+
     pub fn init_system(&mut self, world: &mut World, mut system: Box<dyn System<Input = ()> + Send + Sync>) {
         system.init(world);
 
@@ -76,8 +80,9 @@ impl Schedule {
         }
 
         let world = unsafe { world_ptr.as_world_mut() };
-        for SystemRecord { system, bucket_index: _ } in self.system_records.iter_mut() {
-            system.after(world);
+        for i in 0..self.system_records.len() {
+            let SystemRecord { system, bucket_index: _ } = &mut self.system_records[i];
+            system.after(world.command_buffer());
         }
 
         let system_ids = SYSTEM_IDS.read().unwrap();
@@ -85,7 +90,7 @@ impl Schedule {
         while i < self.system_records.len() {
             let system_id = self.system_records[i].system.id();
             if !system_ids.is_alive(system_id.get()) {
-                self.remove_sytem_at(i);
+                self.remove_system_at(i);
             } else {
                 i += 1;
             }
@@ -97,15 +102,15 @@ impl Schedule {
         let world_id = self.linked_world.unwrap_or(world.id());
         assert!(world.id() == world_id, "initialized schedule ran in a different world");
     
-        world.remove_dead_observers();
         while let Some(system) = self.init_queue.pop() {
             self.init_system(world, system);
         }
 
         self.execute(world.world_ptr_mut());
+        world.process_command_buffer();
     }
 
-    pub fn remove_sytem_at(&mut self, index: usize) {
+    pub fn remove_system_at(&mut self, index: usize) {
         let SystemRecord { system, bucket_index } = &self.system_records[index];
         let id = system.id();
         let bucket_index = *bucket_index;
@@ -158,7 +163,7 @@ impl ParallelBucket {
         self.joined_resource_access.is_compatible(system.resource_access())
     }
 
-    fn add_system(&mut self, system: NonNull<(dyn System<Input = ()> + Send + Sync)>) {
+    fn add_system(&mut self, system: NonNull<dyn System<Input = ()> + Send + Sync>) {
         self.joined_component_access.join(unsafe { system.as_ref().component_access() });
         self.joined_resource_access.join(unsafe { system.as_ref().resource_access() });
         self.systems.push(system);

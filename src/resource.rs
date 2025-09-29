@@ -1,8 +1,13 @@
 use std::{any::{Any, TypeId}, cell::SyncUnsafeCell, collections::HashMap, marker::PhantomData, ops::{Deref, DerefMut}};
 
-use crate::{storage::sparse_set::SparseSet, system::SystemHandle, world::WorldPtr};
+use crate::{Commands, storage::sparse_set::SparseSet, system::SystemHandle, world::WorldPtr};
 
-use super::{access::Access, param::SystemParam, Resource, World};
+use super::{access::Access, param::SystemParam, World};
+
+pub trait Resource: Send + Sync + 'static {
+    fn on_add(&mut self, commands: &mut Commands) {}
+    fn on_remove(&mut self, commands: &mut Commands) {}
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ResourceId(usize);
@@ -69,23 +74,6 @@ impl Resources {
     pub fn remove<R: Resource>(&mut self) -> Option<R> {
         let id = *self.ids.get(&TypeId::of::<R>())?;
         self.sparse_set.remove(id.get()) .map(Self::deinitialize_resource)
-    }
-
-    pub fn get_or_insert<'a, 'b: 'a, R: Resource>(&'b mut self, default: R) -> &'a mut R {
-        let ids_len = self.ids.len();
-        match self.ids.entry(TypeId::of::<R>()) {
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                let id = ids_len;
-                entry.insert(ResourceId(id));
-                self.sparse_set.insert(id, Self::initialize_resource(default));
-                unsafe { self.sparse_set.get_mut(id).expect("Resources::get_or_insert inserted resource not present")
-                                    .get_mut().downcast_mut_unchecked::<R>() }
-            },
-            std::collections::hash_map::Entry::Occupied(entry) => {
-                let id = entry.get().get();
-                unsafe { self.sparse_set.entry(id).or_insert_with(|| Self::initialize_resource(default)).get_mut().downcast_mut_unchecked::<R>() }
-            }
-        }
     }
 
     pub fn get_or_insert_with<'a, 'b: 'a, R: Resource, F: FnOnce() -> R>(&'b mut self, f: F) -> &'a mut R {
@@ -192,10 +180,10 @@ impl<R: Resource + Send + Sync + 'static> SystemParam for ResMut<'_, R> {
         ResMut { val, was_modified: &mut state.1 }
     }
 
-    fn after<'state>(world: &mut World, state: &'state mut Self::State, _: &mut SystemHandle<'state>) {
+    fn after(commands: &mut Commands, state: &mut Self::State) {
         if state.1 {
-            world.send_event(Changed::<R>(PhantomData));
-            world.send_signal_from_system(Changed::<R>(PhantomData), None);
+            commands.send_event(Changed::<R>(PhantomData));
+            commands.send_signal(Changed::<R>(PhantomData), None);
             state.1 = false;
         }
     }
@@ -238,10 +226,10 @@ impl<R: Resource + Send + Sync + 'static> SystemParam for Option<ResMut<'_, R>> 
         Some(ResMut { val, was_modified: &mut state.1 })
     }
 
-    fn after<'state>(world: &mut World, state: &'state mut Self::State, _: &mut SystemHandle<'state>) {
+    fn after(commands: &mut Commands, state: &mut Self::State) {
         if state.1 {
-            world.send_event(Changed::<R>(PhantomData));
-            world.send_signal_from_system(Changed::<R>(PhantomData), None);
+            commands.send_event(Changed::<R>(PhantomData));
+            commands.send_signal(Changed::<R>(PhantomData), None);
             state.1 = false;
         }
     }
