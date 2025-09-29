@@ -1,6 +1,6 @@
 use std::{any::{Any, TypeId}, collections::HashMap, hash::Hash, ptr::NonNull};
 
-use crate::{access::Access, system::{IntoSystem, System, SystemId, SystemInput, SYSTEM_IDS}, world::{World, WorldId, WorldPtr}};
+use crate::{access::Access, system::{IntoSystem, System, SystemId, SystemInput}, world::{World, WorldId, WorldPtr}};
 
 const PARALLEL_EXECUTION_THRESHOLD: usize = 4;
 
@@ -20,7 +20,7 @@ struct SystemRecord {
 impl Schedule {
     pub fn add_system<ParamInput: SystemInput, S: IntoSystem<ParamInput, ()> + 'static>(&mut self, system: S) -> SystemId {
         let system: S::System = system.into_system();
-        let id = system.id();
+        let id = system.id().clone();
 
         self.init_queue.push(Box::new(system));
         id
@@ -87,17 +87,15 @@ impl Schedule {
             system.after(world.command_buffer());
         }
 
-        let system_ids = SYSTEM_IDS.read().unwrap();
         let mut i = 0;
         while i < self.system_records.len() {
             let system_id = self.system_records[i].system.id();
-            if !system_ids.is_alive(system_id.get()) {
+            if !system_id.is_alive() {
                 self.remove_system_at(i);
             } else {
                 i += 1;
             }
         }
-        drop(system_ids);
     }
 
     pub fn run(&mut self, world: &mut World) {

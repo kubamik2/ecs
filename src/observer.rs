@@ -1,4 +1,4 @@
-use crate::{access::Access, param::SystemParam, signal::Signal, system::{System, SystemFunc, SystemHandle, SYSTEM_IDS, Commands}, world::WorldPtr, Entity, Event, IntoSystem, SystemId, World};
+use crate::{access::Access, param::SystemParam, signal::Signal, system::{System, SystemFunc, SystemHandle, Commands}, world::WorldPtr, Entity, Event, IntoSystem, SystemId, World};
 use std::{any::TypeId, collections::HashMap, ptr::NonNull};
 
 #[derive(Default)]
@@ -11,7 +11,7 @@ impl Observers {
     pub(crate) fn add_observer<ParamIn: ObserverInput, S: IntoSystem<ParamIn, SignalInput> + 'static>(&mut self, system: S) -> SystemId {
         let mut system: Box<dyn System<Input = SignalInput> + Send + Sync> = Box::new(system.into_system());
         let event_type_id = *system.signal_access().expect("observer does not have signal access");
-        let system_id = system.id();
+        let system_id = system.id().clone();
         self.event_to_systems.entry(event_type_id).or_default().push(NonNull::from(system.as_mut()));
         self.systems.push(system);
         system_id
@@ -19,7 +19,7 @@ impl Observers {
 
     pub(crate) fn add_boxed_observer<S: System<Input = SignalInput> + Send + Sync + 'static>(&mut self, mut system: Box<S>) -> SystemId {
         let event_type_id = *system.signal_access().expect("observer does not have signal access");
-        let system_id = system.id();
+        let system_id = system.id().clone();
         self.event_to_systems.entry(event_type_id).or_default().push(NonNull::from(system.as_mut()));
         self.systems.push(system);
         system_id
@@ -31,7 +31,7 @@ impl Observers {
             target,
         };
 
-        let Some(system_indices) = self.event_to_systems.get(&TypeId::of::<E>()) else { return; }; 
+        let Some(system_indices) = self.event_to_systems.get_mut(&TypeId::of::<E>()) else { return; }; 
         for mut system_ptr in system_indices.iter().copied() {
             let system = unsafe { system_ptr.as_mut() };
             if !system.id().is_alive() { continue; }
@@ -46,11 +46,10 @@ impl Observers {
 
     pub(crate) fn remove_dead_observers(&mut self) {
         let mut i = 0;
-        let system_ids = SYSTEM_IDS.read().unwrap();
         while i < self.systems.len() {
             let id = self.systems[i].id();
             let event_type_id = self.systems[i].signal_access().expect("observer no signal access");
-            if !system_ids.is_alive(id.get()) {
+            if !id.is_alive() {
                 let system_ptrs = self.event_to_systems.get_mut(event_type_id).expect("dangling event");
 
                 let position = system_ptrs

@@ -1,6 +1,6 @@
 use std::{any::TypeId, marker::PhantomData, ops::{Deref, DerefMut}, ptr::{self, NonNull}};
 
-use crate::{observer::{ObserverInput, Observers, SignalInput}, query::QueryData, resource::{Changed, ResourceId}, schedule::Schedules, system::{IntoSystem, SystemId, SYSTEM_IDS, System}, *};
+use crate::{observer::{ObserverInput, Observers, SignalInput}, query::QueryData, resource::{Changed, ResourceId}, schedule::Schedules, system::{IntoSystem, SystemId, System}, *};
 
 static WORLD_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -409,18 +409,10 @@ impl World {
 
 
     #[inline]
-    pub fn remove_system(&self, system_id: SystemId) {
-        let mut system_ids = SYSTEM_IDS.write().unwrap();
-        if system_ids.is_alive(system_id.get()) {
-            system_ids.despawn(system_id.get());
-        }
-    }
-
-    #[inline]
     pub fn add_system<L: ScheduleLabel, ParamIn: SystemInput, S: IntoSystem<ParamIn, ()> + 'static>(&mut self, label: L, system: S) -> SystemId {
         let schedule = self.schedules.get_or_default(label);
         let boxed_system = Box::new(system.into_system());
-        let id = boxed_system.id();
+        let id = boxed_system.id().clone();
         schedule.add_boxed_system(boxed_system);
         id
     }

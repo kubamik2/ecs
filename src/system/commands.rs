@@ -1,6 +1,6 @@
 use crate::{Component, ComponentBundle, Entity, Event, IntoSystem, ObserverInput, Resource, ScheduleLabel, SignalInput, SystemInput, World, param::SystemParam, world::WorldPtr};
 
-use super::{SystemHandle, SystemId, SYSTEM_IDS};
+use super::{SystemHandle, SystemId};
 
 pub struct Commands<'a> {
     queue: &'a mut Vec<u8>,
@@ -25,9 +25,6 @@ enum CommandMeta {
         f: fn(&mut World, *mut u8, Option<Entity>),
         target: Option<Entity>,
         data_size: usize,
-    },
-    RemoveSystem {
-        id: SystemId,
     },
     RunSchedule {
         f: fn(&mut World, *mut u8),
@@ -59,11 +56,12 @@ enum CommandMeta {
 
 impl Commands<'_> {
     #[inline]
-    fn copy_data<T>(&mut self, value: &T, index: usize) {
+    fn copy_data<T>(&mut self, value: T, index: usize) {
         use std::ptr::NonNull;
-        let src = NonNull::from(value).cast::<u8>();
+        let src = NonNull::from(&value).cast::<u8>();
         let dst = unsafe { NonNull::from(&self.queue[0]).cast::<u8>().add(index) };
         unsafe { src.copy_to_nonoverlapping(dst, size_of::<T>()) };
+        std::mem::forget(value);
     }
 
     pub fn spawn<B: ComponentBundle>(&mut self, bundle: B) {
@@ -80,10 +78,8 @@ impl Commands<'_> {
             data_size: size_of::<B>(),
         };
 
-        self.copy_data(&command_meta, index);
-        self.copy_data(&bundle, index + size_of::<CommandMeta>());
-
-        std::mem::forget(bundle);
+        self.copy_data(command_meta, index);
+        self.copy_data(bundle, index + size_of::<CommandMeta>());
     }
 
     pub fn set_component<C: Component>(&mut self, entity: Entity, component: C) {
@@ -101,10 +97,8 @@ impl Commands<'_> {
             entity
         };
 
-        self.copy_data(&command_meta, index);
-        self.copy_data(&component, index + size_of::<CommandMeta>());
-
-        std::mem::forget(component);
+        self.copy_data(command_meta, index);
+        self.copy_data(component, index + size_of::<CommandMeta>());
     }
 
     pub fn despawn(&mut self, entity: Entity) {
@@ -114,7 +108,7 @@ impl Commands<'_> {
 
         let command_meta = CommandMeta::Despawn(entity);
 
-        self.copy_data(&command_meta, index);
+        self.copy_data(command_meta, index);
     }
 
     pub fn remove_component<C: Component>(&mut self, entity: Entity) {
@@ -129,7 +123,7 @@ impl Commands<'_> {
             entity,
         };
 
-        self.copy_data(&command_meta, index);
+        self.copy_data(command_meta, index);
     }
 
     pub fn send_signal<E: Event>(&mut self, event: E, target: Option<Entity>) {
@@ -147,22 +141,8 @@ impl Commands<'_> {
             data_size: size_of::<E>(),
         };
 
-        self.copy_data(&command_meta, index);
-        self.copy_data(&event, index + size_of::<CommandMeta>());
-
-        std::mem::forget(event);
-    }
-
-    pub fn remove_system(&mut self, id: SystemId) {
-        let additional = size_of::<CommandMeta>();
-        let index = self.queue.len();
-        self.queue.resize(self.queue.len() + additional, 0);
-
-        let command_meta = CommandMeta::RemoveSystem {
-            id,
-        };
-
-        self.copy_data(&command_meta, index);
+        self.copy_data(command_meta, index);
+        self.copy_data(event, index + size_of::<CommandMeta>());
     }
 
     pub fn run_schedule<L: ScheduleLabel>(&mut self, label: L) {
@@ -179,10 +159,8 @@ impl Commands<'_> {
             data_size: size_of::<L>(),
         };
 
-        self.copy_data(&command_meta, index);
-        self.copy_data(&label, index + size_of::<CommandMeta>());
-
-        std::mem::forget(label);
+        self.copy_data(command_meta, index);
+        self.copy_data(label, index + size_of::<CommandMeta>());
     }
 
     pub fn insert_resource<R: Resource>(&mut self, resource: R) {
@@ -199,10 +177,8 @@ impl Commands<'_> {
             data_size: size_of::<R>(),
         };
 
-        self.copy_data(&command_meta, index);
-        self.copy_data(&resource, index + size_of::<CommandMeta>());
-
-        std::mem::forget(resource);
+        self.copy_data(command_meta, index);
+        self.copy_data(resource, index + size_of::<CommandMeta>());
     }
 
     pub fn remove_resource<R: Resource>(&mut self) {
@@ -216,14 +192,14 @@ impl Commands<'_> {
             },
         };
 
-        self.copy_data(&command_meta, index);
+        self.copy_data(command_meta, index);
     }
 
     pub fn add_system<L: ScheduleLabel, ParamIn: SystemInput, S: IntoSystem<ParamIn, ()> + 'static>(&mut self, label: L, system: S) -> SystemId {
         let additional = size_of::<CommandMeta>() + size_of::<L>() + size_of::<S>();
         let index = self.queue.len();
         self.queue.resize(self.queue.len() + additional, 0);
-        let system_id = SystemId(SYSTEM_IDS.write().unwrap().spawn());
+        let system_id = SystemId::new();
         
         let command_meta = CommandMeta::AddSystem {
             f: |world, label_data, system_data, system_id| {
@@ -233,15 +209,13 @@ impl Commands<'_> {
             },
             label_data_size: size_of::<L>(),
             system_data_size: size_of::<S>(),
-            system_id,
+            system_id: system_id.clone(),
         };
 
-        self.copy_data(&command_meta, index);
-        self.copy_data(&label, index + size_of::<CommandMeta>());
-        self.copy_data(&system, index + size_of::<CommandMeta>() + size_of::<L>());
+        self.copy_data(command_meta, index);
+        self.copy_data(label, index + size_of::<CommandMeta>());
+        self.copy_data(system, index + size_of::<CommandMeta>() + size_of::<L>());
 
-        std::mem::forget(label);
-        std::mem::forget(system);
         system_id
     }
 
@@ -249,7 +223,7 @@ impl Commands<'_> {
         let additional = size_of::<CommandMeta>() + size_of::<S>();
         let index = self.queue.len();
         self.queue.resize(self.queue.len() + additional, 0);
-        let system_id = SystemId(SYSTEM_IDS.write().unwrap().spawn());
+        let system_id = SystemId::new();
         
         let command_meta = CommandMeta::AddObserver {
             f: |world, data, system_id| {
@@ -257,13 +231,12 @@ impl Commands<'_> {
                 world.add_observer_with_id(system, system_id);
             },
             data_size: size_of::<S>(),
-            system_id,
+            system_id: system_id.clone(),
         };
 
-        self.copy_data(&command_meta, index);
-        self.copy_data(&system, index + size_of::<CommandMeta>() );
+        self.copy_data(command_meta, index);
+        self.copy_data(system, index + size_of::<CommandMeta>() );
 
-        std::mem::forget(system);
         system_id
     }
 
@@ -281,10 +254,8 @@ impl Commands<'_> {
             data_size: size_of::<E>(),
         };
 
-        self.copy_data(&command_meta, index);
-        self.copy_data(&event, index + size_of::<CommandMeta>());
-
-        std::mem::forget(event);
+        self.copy_data(command_meta, index);
+        self.copy_data(event, index + size_of::<CommandMeta>());
     }
 
     #[inline]
@@ -322,9 +293,6 @@ impl Commands<'_> {
                     let ptr = unsafe { (&mut self.queue[0] as *mut u8).add(cursor) };
                     (f)(world, ptr, target);
                     cursor += data_size;
-                },
-                CommandMeta::RemoveSystem { id } => {
-                    world.remove_system(id);
                 },
                 CommandMeta::RunSchedule { f, data_size } => {
                     let ptr = unsafe { (&mut self.queue[0] as *mut u8).add(cursor) };

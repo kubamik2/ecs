@@ -1,4 +1,4 @@
-use crate::{resource::Changed, world::WorldPtr, *};
+use crate::*;
 
 #[derive(Component)]
 struct ComponentA {
@@ -103,8 +103,10 @@ fn add_schedule() {
 fn remove_system() {
     let mut world = World::default();
     let mut schedule = Schedule::default();
-    let id = schedule.add_system(|| { println!("I am a system!"); });
-    world.remove_system(id);
+    let id = schedule.add_system(|| { panic!(); });
+    let id2 = id.clone();
+    id.mark_dead();
+    assert!(!id.is_alive() && !id2.is_alive());
     schedule.run(&mut world);
     assert!(schedule.is_empty());
 }

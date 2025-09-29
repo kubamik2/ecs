@@ -1,31 +1,41 @@
 mod commands;
 pub use commands::Commands;
-use std::{any::TypeId, marker::PhantomData, ops::{Deref, DerefMut}, sync::RwLock};
+use std::{any::TypeId, marker::PhantomData, ops::{Deref, DerefMut}, sync::{Arc, RwLock, atomic::{AtomicBool, Ordering}}};
 use crate::{entity::Entities, param::SystemParam, world::WorldPtr, Entity};
 
 use super::{access::Access, World};
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct SystemId(Entity);
+#[derive(Clone)]
+pub struct SystemId(Arc<AtomicBool>);
 
 impl SystemId {
     #[inline]
-    pub(crate) const fn get(&self) -> Entity {
-        self.0
-    }
-}
-
-impl SystemId {
     pub fn is_alive(&self) -> bool {
-        SYSTEM_IDS.read().unwrap().is_alive(self.0)
+        self.0.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub(crate) fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(true)))
+    }
+
+    #[inline]
+    pub fn mark_dead(&self) {
+        self.0.store(false, Ordering::Relaxed);
     }
 }
 
-pub(crate) static SYSTEM_IDS: RwLock<Entities> = RwLock::new(Entities::new());
+impl PartialEq for SystemId {
+    fn eq(&self, other: &Self) -> bool {
+        let addr = self.0.as_ptr().addr();
+        let other_addr = other.0.as_ptr().addr();
+        addr == other_addr
+    }
+}
 
 pub trait System {
     type Input;
-    fn id(&self) -> SystemId;
+    fn id(&self) -> &SystemId;
     fn name(&self) -> &'static str;
     fn execute(&mut self, world_ptr: WorldPtr<'_>, input: Self::Input);
     fn component_access(&self) -> &Access;
@@ -66,7 +76,7 @@ impl<Input, ParamIn, F: SystemFunc<ParamIn, Input>> System for FunctionSystem<Pa
         let name = self.name;
         let state = self.state.as_mut().unwrap_or_else(|| panic!("system '{}' has been executed without initialization", name));
         let system_meta = SystemHandle {
-            id: self.id,
+            id: &self.id,
             _m: PhantomData,
         };
         self.func.run(world_ptr, state, input, &system_meta);
@@ -115,8 +125,8 @@ impl<Input, ParamIn, F: SystemFunc<ParamIn, Input>> System for FunctionSystem<Pa
     }
 
     #[inline]
-    fn id(&self) -> SystemId {
-        self.id
+    fn id(&self) -> &SystemId {
+        &self.id
     }
 
     fn is_init(&self) -> bool {
@@ -283,7 +293,7 @@ where
     type System = FunctionSystem<ParamIn, Input, F>;
     fn into_system(self) -> Self::System {
         FunctionSystem {
-            id: SystemId(SYSTEM_IDS.write().unwrap().spawn()),
+            id: SystemId::new(),
             name: self.name(),
             state: None,
             component_access: None,
@@ -325,12 +335,12 @@ variadics_please::all_tuples!{system_input_impl, 1, 32, In}
 
 // prepared struct for manipulating system directly
 pub struct SystemHandle<'a> {
-    id: SystemId,
+    id: &'a SystemId,
     _m: PhantomData<&'a u8>
 }
 
 impl SystemHandle<'_> {
-    pub fn id(&self) -> SystemId {
+    pub fn id(&self) -> &SystemId {
         self.id
     }
 }
