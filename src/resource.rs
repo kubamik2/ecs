@@ -151,8 +151,9 @@ impl<R: Resource + Send + Sync + 'static> SystemParam for Res<'_, R> {
         resource_access.immutable.set(world.resource_id::<R>().get());
     }
 
-    fn init_state(world: &mut World) -> Self::State {
-        world.resource_id::<R>()
+    fn init_state(world: &mut World, system_handle: &SystemHandle) -> Self::State {
+        world.get_resource_id::<R>()
+            .unwrap_or_else(|| panic!("system '{}' attempted initialization with uninitialized resource '{}'", system_handle.name(), std::any::type_name::<R>()))
     }
 
     unsafe fn fetch<'a>(world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: &SystemHandle) -> Self::Item<'a> {
@@ -171,8 +172,10 @@ impl<R: Resource + Send + Sync + 'static> SystemParam for ResMut<'_, R> {
         resource_access.mutable_count += 1;
     }
 
-    fn init_state(world: &mut World) -> Self::State {
-        (world.resource_id::<R>(), false)
+    fn init_state(world: &mut World, system_handle: &SystemHandle) -> Self::State {
+        let id = world.get_resource_id::<R>()
+            .unwrap_or_else(|| panic!("system '{}' attempted initialization with uninitialized resource '{}'", system_handle.name(), std::any::type_name::<R>()));
+        (id, false)
     }
 
     unsafe fn fetch<'a>(mut world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: &SystemHandle) -> Self::Item<'a> {
@@ -197,7 +200,7 @@ impl<R: Resource + Send + Sync + 'static> SystemParam for Option<Res<'_, R>> {
         resource_access.immutable.set(world.resource_id::<R>().get());
     }
 
-    fn init_state(world: &mut World) -> Self::State {
+    fn init_state(world: &mut World, _: &SystemHandle) -> Self::State {
         world.register_resource::<R>()
     }
 
@@ -217,7 +220,7 @@ impl<R: Resource + Send + Sync + 'static> SystemParam for Option<ResMut<'_, R>> 
         resource_access.mutable_count += 1;
     }
 
-    fn init_state(world: &mut World) -> Self::State {
+    fn init_state(world: &mut World, _: &SystemHandle) -> Self::State {
         (world.register_resource::<R>(), false)
     }
 

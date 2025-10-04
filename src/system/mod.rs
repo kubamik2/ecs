@@ -1,7 +1,7 @@
 mod commands;
 pub use commands::Commands;
-use std::{any::TypeId, marker::PhantomData, ops::{Deref, DerefMut}, sync::{Arc, RwLock, atomic::{AtomicBool, Ordering}}};
-use crate::{entity::Entities, param::SystemParam, world::WorldPtr, Entity};
+use std::{any::TypeId, marker::PhantomData, ops::{Deref, DerefMut}, sync::{Arc, atomic::{AtomicBool, Ordering}}};
+use crate::{param::SystemParam, world::WorldPtr};
 
 use super::{access::Access, World};
 
@@ -77,9 +77,10 @@ impl<Input, ParamIn, F: SystemFunc<ParamIn, Input>> System for FunctionSystem<Pa
         let state = self.state.as_mut().unwrap_or_else(|| panic!("system '{}' has been executed without initialization", name));
         let system_meta = SystemHandle {
             id: &self.id,
+            name,
             _m: PhantomData,
         };
-        self.func.run(world_ptr, state, input, &system_meta);
+        self.func.run(world_ptr, state, input, system_meta);
     }
 
     #[inline]
@@ -106,7 +107,12 @@ impl<Input, ParamIn, F: SystemFunc<ParamIn, Input>> System for FunctionSystem<Pa
 
     #[inline]
     fn init(&mut self, world: &mut World) {
-        self.state = Some(F::init_state(world));
+        let system_handle = SystemHandle {
+            name: self.name,
+            id: &self.id,
+            _m: PhantomData,
+        };
+        self.state = Some(F::init_state(world, system_handle));
         let mut component_access = Access::default();
         let mut resource_access = Access::default();
         F::join_component_access(world, &mut component_access);
@@ -136,11 +142,11 @@ impl<Input, ParamIn, F: SystemFunc<ParamIn, Input>> System for FunctionSystem<Pa
 
 pub trait SystemFunc<ParamIn, Input> {
     type State: Send + Sync; fn name(&self) -> &'static str;
-    fn run<'a>(&'a self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, input: Input, system_meta: &'a SystemHandle<'a>);
+    fn run<'a>(&'a self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, input: Input, system_meta: SystemHandle<'a>);
     fn join_component_access(world: &mut World, component_access: &mut Access);
     fn join_resource_access(world: &mut World, resource_access: &mut Access);
     fn signal_access() -> Option<TypeId>;
-    fn init_state(world: &mut World) -> Self::State;
+    fn init_state(world: &mut World, system_handle: SystemHandle) -> Self::State;
     fn after<'state>(commands: Commands<'state>, state: &'state mut Self::State);
 }
 
@@ -150,7 +156,7 @@ impl<F, Input> SystemFunc<(), Input> for F where
 {
     type State = ();
     #[inline]
-    fn run<'a>(&'a self, _: WorldPtr<'a>, _: &'a mut Self::State, _: Input, _: &'a SystemHandle<'a>) {
+    fn run<'a>(&'a self, _: WorldPtr<'a>, _: &'a mut Self::State, _: Input, _: SystemHandle<'a>) {
         fn call(mut f: impl FnMut()) {
             f()
         }
@@ -174,7 +180,8 @@ impl<F, Input> SystemFunc<(), Input> for F where
     }
 
     #[inline]
-    fn init_state(_: &mut World) -> Self::State {}
+    fn init_state(_: &mut World, _: SystemHandle) -> Self::State {}
+
     #[inline]
     fn after(_: Commands, _: &mut Self::State) {}
 }
@@ -188,11 +195,11 @@ impl<F, ParamIn, Input> SystemFunc<ParamIn, Input> for F where
 {
     type State = ParamIn::State;
     #[inline]
-    fn run<'a>(&'a self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: Input, system_meta: &'a SystemHandle<'a>) {
+    fn run<'a>(&'a self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: Input, system_meta: SystemHandle<'a>) {
         fn call<In>(mut f: impl FnMut(In), p: In) {
             f(p)
         }
-        let p = unsafe { ParamIn::fetch(world_ptr, state, system_meta) };
+        let p = unsafe { ParamIn::fetch(world_ptr, state, &system_meta) };
         call(self, p);
     }
 
@@ -212,8 +219,8 @@ impl<F, ParamIn, Input> SystemFunc<ParamIn, Input> for F where
     }
 
     #[inline]
-    fn init_state(world: &mut World) -> Self::State {
-        ParamIn::init_state(world)
+    fn init_state(world: &mut World, system_handle: SystemHandle) -> Self::State {
+        ParamIn::init_state(world, &system_handle)
     }
 
     #[inline]
@@ -238,13 +245,13 @@ macro_rules! system_func_impl {
             $($param: for<'a> SystemParam),+
         {
             type State = ($($param::State),+);
-            fn run<'a>(&'a self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: Input, system_meta: &'a SystemHandle<'a>) {
+            fn run<'a>(&'a self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: Input, system_meta: SystemHandle<'a>) {
                 #[allow(clippy::too_many_arguments)]
                 fn call<$($param),+>(mut f: impl FnMut($($param),+), $($p:$param),+) {
                     f($($p),+);
                 }
                 unsafe {
-                    $(let $p = $param::fetch(world_ptr, &mut state.$i, system_meta);)+
+                    $(let $p = $param::fetch(world_ptr, &mut state.$i, &system_meta);)+
                     call(self, $($p),+);
                 }
             }
@@ -261,8 +268,8 @@ macro_rules! system_func_impl {
                 std::any::type_name::<F>()
             }
 
-            fn init_state(world: &mut World) -> Self::State {
-                ($($param::init_state(world)),+)
+            fn init_state(world: &mut World, system_handle: SystemHandle) -> Self::State {
+                ($($param::init_state(world, &system_handle)),+)
             }
 
             fn signal_access() -> Option<TypeId> {
@@ -336,12 +343,19 @@ variadics_please::all_tuples!{system_input_impl, 1, 32, In}
 // prepared struct for manipulating system directly
 pub struct SystemHandle<'a> {
     id: &'a SystemId,
+    name: &'static str,
     _m: PhantomData<&'a u8>
 }
 
 impl SystemHandle<'_> {
-    pub fn id(&self) -> &SystemId {
+    #[inline]
+    pub const fn id(&self) -> &SystemId {
         self.id
+    }
+
+    #[inline]
+    pub const fn name(&self) -> &'static str {
+        self.name
     }
 }
 
@@ -351,7 +365,7 @@ impl SystemParam for &SystemHandle<'_> {
     unsafe fn fetch<'a>(_: WorldPtr<'a>, _: &'a mut Self::State, system_meta: &'a SystemHandle) -> Self::Item<'a> {
         system_meta
     }
-    fn init_state(_: &mut World) -> Self::State {}
+    fn init_state(_: &mut World, _: &SystemHandle) -> Self::State {}
 }
 
 
@@ -375,7 +389,7 @@ impl<T: Default + Send + Sync + 'static> SystemParam for Local<'_, T> {
     type State = T;
 
     #[inline]
-    fn init_state(_: &mut World) -> Self::State {
+    fn init_state(_: &mut World, _: &SystemHandle) -> Self::State {
         T::default()
     }
 

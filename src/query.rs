@@ -134,7 +134,7 @@ impl<D: QueryData, F: QueryFilter> SystemParam for Query<'_, D, F> {
         D::join_component_access(world, component_access);
     }
 
-    fn init_state(world: &mut World) -> Self::State {
+    fn init_state(world: &mut World, _: &SystemHandle) -> Self::State {
         let query = Query::<D, F>::new(world);
         (query.required_component_signature, query.cached_component_ids, query.forbidden_component_signature)
     }

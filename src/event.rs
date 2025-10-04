@@ -65,7 +65,7 @@ impl<E: Event> EventReader<'_, E> {
 impl<E: Event> SystemParam for EventReader<'_, E> {
     type Item<'a> = EventReader<'a, E>;
     type State = usize;
-    fn init_state(_: &mut crate::World) -> Self::State {
+    fn init_state(_: &mut crate::World, _: &SystemHandle) -> Self::State {
         0
     }
 
@@ -104,7 +104,7 @@ impl<E: Event> EventReadWriter<'_, E> {
 impl<E: Event> SystemParam for EventReadWriter<'_, E> {
     type Item<'a> = EventReadWriter<'a, E>;
     type State = usize;
-    fn init_state(_: &mut crate::World) -> Self::State {
+    fn init_state(_: &mut crate::World, _: &SystemHandle) -> Self::State {
         0
     }
 

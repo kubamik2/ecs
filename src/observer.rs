@@ -96,13 +96,13 @@ macro_rules! observer_func_impl {
             $($param: for<'a> SystemParam + 'static),+
         {
             type State = ($($param::State),+);
-            fn run<'a>(&self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, input: SignalInput, system_meta: &SystemHandle) {
+            fn run<'a>(&self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, input: SignalInput, system_meta: SystemHandle) {
                 #[allow(clippy::too_many_arguments)]
                 fn call<'a, E: Event, $($param),+>(mut f: impl FnMut(Signal<'a, E>, $($param),+), s: Signal<'a, E>, $($p:$param),+) {
                     f(s, $($p),+);
                 }
                 unsafe {
-                    $(let $p = $param::fetch(world_ptr, &mut state.$i, system_meta);)+
+                    $(let $p = $param::fetch(world_ptr, &mut state.$i, &system_meta);)+
                     let signal = Signal::fetch(world_ptr, input);
                     call(self, signal, $($p),+);
                 }
@@ -120,8 +120,8 @@ macro_rules! observer_func_impl {
                 std::any::type_name::<F>()
             }
 
-            fn init_state(world: &mut World) -> Self::State {
-                ($($param::init_state(world)),+)
+            fn init_state(world: &mut World, system_handle: SystemHandle) -> Self::State {
+                ($($param::init_state(world, &system_handle)),+)
             }
 
             fn signal_access() -> Option<TypeId> {
@@ -145,12 +145,12 @@ impl<E: Event, F, In> SystemFunc<(Signal<'_, E>, In), SignalInput> for F where
     In: for<'a> SystemParam + 'static,
 {
     type State = In::State;
-    fn run<'a>(&self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, input: SignalInput, system_meta: &SystemHandle) {
+    fn run<'a>(&self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, input: SignalInput, system_meta: SystemHandle) {
         fn call<'a, E: Event, In>(mut f: impl FnMut(Signal<'a, E>, In), s: Signal<'a, E>, p: In) {
             f(s, p)
         }
         unsafe {
-            let p = In::fetch(world_ptr, state, system_meta);
+            let p = In::fetch(world_ptr, state, &system_meta);
             let signal = Signal::fetch(world_ptr, input);
             call(self, signal, p);
         }
@@ -168,8 +168,8 @@ impl<E: Event, F, In> SystemFunc<(Signal<'_, E>, In), SignalInput> for F where
         std::any::type_name::<F>()
     }
 
-    fn init_state(world: &mut World) -> Self::State {
-        In::init_state(world)
+    fn init_state(world: &mut World, system_handle: SystemHandle) -> Self::State {
+        In::init_state(world, &system_handle)
     }
 
     fn signal_access() -> Option<TypeId> {
@@ -186,7 +186,7 @@ impl<E: Event, F> SystemFunc<Signal<'_, E>, SignalInput> for F where
     for<'a> &'a F: FnMut(Signal<'a, E>)
 {
     type State = ();
-    fn run<'a>(&self, world_ptr: WorldPtr<'a>, _: &'a mut Self::State, input: SignalInput, _: &SystemHandle) {
+    fn run<'a>(&self, world_ptr: WorldPtr<'a>, _: &'a mut Self::State, input: SignalInput, _: SystemHandle) {
         fn call<'a, E: Event>(mut f: impl FnMut(Signal<'a, E>), s: Signal<'a, E>) {
             f(s)
         }
@@ -202,7 +202,7 @@ impl<E: Event, F> SystemFunc<Signal<'_, E>, SignalInput> for F where
         std::any::type_name::<F>()
     }
 
-    fn init_state(_: &mut World) -> Self::State {}
+    fn init_state(_: &mut World, _: SystemHandle) -> Self::State {}
 
     fn signal_access() -> Option<TypeId> {
         Some(TypeId::of::<E>())

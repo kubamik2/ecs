@@ -342,7 +342,7 @@ impl SystemParam for Commands<'_> {
     type Item<'a> = Commands<'a>;
     type State = Vec<u8>;
 
-    fn init_state(_: &mut World) -> Self::State {
+    fn init_state(_: &mut World, _: &SystemHandle) -> Self::State {
         Vec::new()
     }
 

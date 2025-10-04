@@ -11,7 +11,7 @@ pub trait SystemParam {
     fn join_component_access(world: &mut World, component_access: &mut Access) {}
     fn join_resource_access(world: &mut World, resource_access: &mut Access) {}
     fn join_signal_access(signal_access: &mut Option<TypeId>) {}
-    fn init_state(world: &mut World) -> Self::State;
+    fn init_state(world: &mut World, system_meta: &SystemHandle) -> Self::State;
     /// This function will run in parallel
     /// It is only meant to fetch the reference to the data from the world
     /// # Safety
