@@ -1,6 +1,6 @@
 use std::{any::TypeId, marker::PhantomData, ops::{Deref, DerefMut}, ptr::{self, NonNull}};
 
-use crate::{observer::{ObserverInput, Observers, SignalInput}, query::QueryData, resource::{Changed, ResourceId}, schedule::Schedules, system::{IntoSystem, SystemId, System}, *};
+use crate::{observer::{ObserverInput, Observers, SignalInput}, query::QueryData, resource::{Changed, ResourceId}, schedule::Schedules, system::{IntoSystem, System, SystemId}, *};
 
 static WORLD_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -10,7 +10,7 @@ pub struct WorldId(usize);
 pub struct World {
     id: WorldId,
     components: component::Components,
-    entity_manager: entity::Entities,
+    pub(crate) entities: entity::Entities,
     resources: resource::Resources,
     observers: Observers,
     schedules: Schedules,
@@ -32,7 +32,7 @@ impl World {
     pub fn new(num_threads: usize) -> Result<Self, rayon::ThreadPoolBuildError> {
         Ok(Self {
             id: WorldId(WORLD_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
-            components: Default::default(), entity_manager: Default::default(),
+            components: Default::default(), entities: Default::default(),
             resources: Default::default(),
             observers: Default::default(),
             schedules: Schedules::default(),
@@ -118,6 +118,13 @@ impl World {
             return Some(res);
         }
         None
+    }
+
+    #[inline]
+    pub(crate) fn remove_resource_by_id(&mut self, resource_id: ResourceId) {
+        let mut commands = Commands::new(&mut self.command_buffer, &self.entities);
+        self.resources.remove_by_id(resource_id, &mut commands);
+        self.process_command_buffer();
     }
 
     #[inline]
@@ -343,32 +350,53 @@ impl World {
 
     #[inline]
     pub fn spawn<B: component::ComponentBundle>(&mut self, components: B) -> Entity {
-        components.spawn(self)
-    }
-    
-    /// # Safety
-    /// caller must manually set the components
-    #[inline]
-    pub(crate) unsafe fn spawn_with_signature(&mut self, signature: Signature) -> Entity {
-        let entity = self.entity_manager.spawn();
-        unsafe { self.components.insert_empty_entity(entity, signature) };
+        let entity = self.entities.spawn();
+        components.spawn(entity, self);
         entity
     }
 
+    #[inline]
+    pub(crate) fn spawn_reserved<B: component::ComponentBundle>(&mut self, entity: Entity, components: B) {
+        components.spawn(entity, self)
+    }
+
+    #[inline]
+    pub(crate) unsafe fn insert_empty_entity(&mut self, entity: Entity, signature: Signature) {
+        unsafe { self.components.insert_empty_entity(entity, signature);}
+    }
+
     pub fn despawn(&mut self, entity: Entity) {
-        if self.entity_manager.is_alive(entity) {
-            self.entity_manager.despawn(entity);
-            let mut world_ptr = self.world_ptr_mut();
-            self.components.despawn(entity, unsafe { world_ptr.as_world_mut() }.command_buffer());
+        if self.entities.is_alive(entity) {
+            self.entities.despawn(entity, &mut self.command_buffer);
+            self.components.despawn(entity, Commands::new(&mut self.command_buffer, &self.entities));
         }
         self.process_command_buffer();
     }
 
     #[inline]
     pub fn is_alive(&self, entity: Entity) -> bool {
-        self.entity_manager.is_alive(entity)
+        self.entities.is_alive(entity)
     }
 
+    pub fn add_child(&mut self, parent: Entity, child: Entity) {
+        if !self.is_alive(parent) || !self.is_alive(child) { return; }
+        self.entities.add_child(parent, child);
+    }
+
+    pub fn remove_child(&mut self, parent: Entity, child: Entity) {
+        if !self.is_alive(parent) { return; }
+        self.entities.remove_child(parent, child);
+    }
+
+    pub fn remove_children(&mut self, entity: Entity) {
+        if !self.is_alive(entity) { return; }
+        self.entities.remove_children(entity);
+    }
+
+    pub fn children(&self, entity: Entity) -> &[Entity] {
+        if !self.is_alive(entity) { return &[]; }
+        self.entities.children(entity)
+    }
 
     // ===== Signals =====
     
@@ -455,15 +483,14 @@ impl World {
 
     #[inline]
     pub(crate) const fn command_buffer(&mut self) -> Commands<'_> {
-        Commands::new(&mut self.command_buffer)
+        Commands::new(&mut self.command_buffer, &self.entities)
     }
 
     #[inline]
     pub(crate) fn process_command_buffer(&mut self) {
         let mut queue = Vec::new();
         std::mem::swap(&mut queue, &mut self.command_buffer);
-        let mut commands = Commands::new(&mut queue);
-        commands.process(self);
+        Commands::process(&mut queue, self);
     }
 }
 

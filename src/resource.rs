@@ -1,9 +1,10 @@
 use std::{any::{Any, TypeId}, cell::SyncUnsafeCell, collections::HashMap, marker::PhantomData, ops::{Deref, DerefMut}};
 
-use crate::{Commands, storage::sparse_set::SparseSet, system::SystemHandle, world::WorldPtr};
+use crate::{Commands, storage::{sparse_set::SparseSet}, system::SystemHandle, world::WorldPtr};
 
 use super::{access::Access, param::SystemParam, World};
 
+#[allow(unused)]
 pub trait Resource: Send + Sync + 'static {
     fn on_add(&mut self, commands: &mut Commands) {}
     fn on_remove(&mut self, commands: &mut Commands) {}
@@ -16,12 +17,18 @@ impl ResourceId {
     #[inline]
     pub const fn get(&self) -> usize {
         self.0
-    } }
+    }
+}
 
 #[derive(Default)]
 pub struct Resources {
     ids: HashMap<TypeId, ResourceId>,
-    sparse_set: SparseSet<SyncUnsafeCell<Box<dyn Any>>>,
+    sparse_set: SparseSet<ResourceRecord>,
+}
+
+pub struct ResourceRecord {
+    resource: SyncUnsafeCell<Box<dyn Any>>,
+    on_remove: for<'a> fn(Box<dyn Any>, &'a mut Commands),
 }
 
 unsafe impl Sync for Resources {}
@@ -40,14 +47,14 @@ impl Resources {
 
     pub fn get<'a, R: Resource>(&self) -> Option<&'a R> {
         let id = *self.ids.get(&TypeId::of::<R>())?;
-        let raw = self.sparse_set.get(id.get())?;
+        let raw = &self.sparse_set.get(id.get())?.resource;
         let val = unsafe { raw.get().as_ref().unwrap_unchecked().downcast_ref_unchecked::<R>() };
         Some(val)
     }
 
     pub fn get_mut<'a, R: Resource>(&mut self) -> Option<&'a mut R> {
         let id = *self.ids.get(&TypeId::of::<R>())?;
-        let raw = self.sparse_set.get(id.get())?;
+        let raw = &self.sparse_set.get(id.get())?.resource;
         let val = unsafe { raw.get().as_mut().unwrap_unchecked().downcast_mut_unchecked::<R>() };
         Some(val)
     }
@@ -68,12 +75,25 @@ impl Resources {
 
     pub fn insert<R: Resource>(&mut self, resource: R) -> Option<R> {
         let id = self.register::<R>();
-        self.sparse_set.insert(id.get(), Self::initialize_resource(resource)).map(Self::deinitialize_resource)
+        let record = ResourceRecord {
+            resource: Self::initialize_resource(resource),
+            on_remove: |resource, commands| {
+                resource.downcast::<R>().expect("Resources on_remove invalid cast").on_remove(commands);
+            },
+        };
+        self.sparse_set.insert(id.get(), record).map(|record| Self::deinitialize_resource(record.resource))
     }
 
     pub fn remove<R: Resource>(&mut self) -> Option<R> {
-        let id = *self.ids.get(&TypeId::of::<R>())?;
-        self.sparse_set.remove(id.get()) .map(Self::deinitialize_resource)
+        let id = self.ids.get(&TypeId::of::<R>())?;
+        self.sparse_set.remove(id.get()).map(|record| Self::deinitialize_resource(record.resource))
+    }
+
+    pub fn remove_by_id(&mut self, resource_id: ResourceId, commands: &mut Commands) {
+        if let Some(record) = self.sparse_set.remove(resource_id.get()) {
+            let resource = record.resource.into_inner();
+            (record.on_remove)(resource, commands);
+        }
     }
 
     pub fn get_or_insert_with<'a, 'b: 'a, R: Resource, F: FnOnce() -> R>(&'b mut self, f: F) -> &'a mut R {
@@ -82,13 +102,26 @@ impl Resources {
             std::collections::hash_map::Entry::Vacant(entry) => {
                 let id = ids_len;
                 entry.insert(ResourceId(id));
-                self.sparse_set.insert(id, Self::initialize_resource(f()));
+                let record = ResourceRecord {
+                    resource: Self::initialize_resource(f()),
+                    on_remove: |resource, commands| {
+                        resource.downcast::<R>().expect("Resources on_remove invalid cast").on_remove(commands);
+                    }
+                };
+                self.sparse_set.insert(id, record);
                 unsafe { self.sparse_set.get_mut(id).expect("Resources::get_or_insert inserted resource not present")
-                                    .get_mut().downcast_mut_unchecked::<R>() }
+                    .resource.get_mut().downcast_mut_unchecked::<R>() }
             },
             std::collections::hash_map::Entry::Occupied(entry) => {
                 let id = entry.get().get();
-                unsafe { self.sparse_set.entry(id).or_insert_with(|| Self::initialize_resource(f())).get_mut().downcast_mut_unchecked::<R>() }
+                unsafe { self.sparse_set.entry(id).or_insert_with(|| 
+                    ResourceRecord {
+                        resource: Self::initialize_resource(f()),
+                        on_remove: |resource, commands| {
+                            resource.downcast::<R>().expect("Resources on_remove invalid cast").on_remove(commands);
+                        }
+                    }).resource.get_mut().downcast_mut_unchecked::<R>()
+                }
             }
         }
     }
@@ -101,14 +134,14 @@ impl Resources {
     #[inline]
     pub fn get_resource_by_id<'a, R: Resource>(&self, id: ResourceId) -> Option<&'a R> {
         self.sparse_set.get(id.get()).map(|raw| {
-            unsafe { raw.get().as_ref().unwrap_unchecked().downcast_ref::<R>().expect("Resources::get_resource_by_id invalid cast") }
+            unsafe { raw.resource.get().as_ref().unwrap_unchecked().downcast_ref::<R>().expect("Resources::get_resource_by_id invalid cast") }
         })
     }
 
     #[inline]
     pub fn get_resource_by_id_mut<'a, R: Resource>(&mut self, id: ResourceId) -> Option<&'a mut R> {
         self.sparse_set.get(id.get()).map(|raw| {
-            unsafe { raw.get().as_mut().unwrap_unchecked().downcast_mut::<R>().expect("Resources::get_resource_by_id invalid cast") }
+            unsafe { raw.resource.get().as_mut().unwrap_unchecked().downcast_mut::<R>().expect("Resources::get_resource_by_id invalid cast") }
         })
     }
 }

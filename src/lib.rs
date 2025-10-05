@@ -18,7 +18,7 @@ mod storage;
 
 pub use component::{ComponentId, Signature, ComponentBundle, Component};
 pub use world::{World, WorldResMut};
-pub use query::{Query, QueryData, Without, With, QueryFilter};
+pub use query::{Query, QueryData, Without, With, QueryFilter, Children};
 pub use resource::{Res, ResMut, ResourceId, Changed, Resource};
 pub use derive::{Component, Resource, ScheduleLabel};
 pub use schedule::{Schedule, ScheduleLabel};

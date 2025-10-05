@@ -113,10 +113,47 @@ fn remove_system() {
 
 #[test]
 fn entities_despawn() {
-    let mut entities = crate::entity::Entities::new();
+    let mut entities = crate::entity::Entities::default();
     let a = entities.spawn();
-    entities.despawn(a);
+    entities.despawn(a, &mut vec![]);
     assert!(!entities.is_alive(a));
+
+    let mut alive_entities = Vec::new();
+    let mut dead_entities = Vec::new();
+
+    for _ in 0..10000 {
+        alive_entities.push(entities.spawn());
+    }
+
+    for i in 0..5 {
+        for j in 0..100 {
+            let index = i * 1000 + j;
+            let entity = alive_entities.remove(index);
+            entities.despawn(entity, &mut Vec::new());
+            dead_entities.push(entity);
+        }
+    }
+
+    for entity in alive_entities.iter().copied() {
+        assert!(entities.is_alive(entity));
+    }
+    for entity in dead_entities.iter().copied() {
+        assert!(!entities.is_alive(entity));
+    }
+    dead_entities.clear();
+    for _ in 0..500 {
+        alive_entities.push(entities.spawn());
+    }
+    for entity in alive_entities.iter().copied() {
+        assert!(entities.is_alive(entity));
+    }
+    while let Some(entity) = alive_entities.pop() {
+        dead_entities.push(entity);
+        entities.despawn(entity, &mut Vec::new());
+    }
+    for entity in dead_entities.iter().copied() {
+        assert!(!entities.is_alive(entity));
+    }
 }
 
 #[test]
@@ -359,4 +396,183 @@ fn recurent_commands() {
     assert!(world.get_resource::<SuccessH>().is_some());
     assert!(world.get_resource::<SuccessI>().is_some());
     assert!(world.get_resource::<SuccessJ>().is_some());
+}
+
+#[test]
+fn hierarchy() {
+    struct System(SystemId);
+
+    impl Component for System {
+        fn on_remove(&mut self, _: &mut Commands) {
+            self.0.mark_dead();
+        }
+    }
+
+    #[derive(Component)]
+    struct Manager;
+
+    #[derive(Component)]
+    struct Parent;
+
+    #[derive(Component)]
+    struct Child;
+
+    let mut world = World::default();
+
+    let mut schedule = Schedule::default();
+    let system_id = schedule.add_system(|| panic!());
+    let manager = world.spawn(Manager);
+    let system = world.spawn(System(system_id));
+    world.add_child(manager, system);
+
+    world.despawn(manager);
+    schedule.run(&mut world);
+
+    let a = world.spawn(Parent);
+    let b = world.spawn(Child);
+    let c = world.spawn(Child);
+    let d = world.spawn(Child);
+    world.add_child(a, b);
+    world.add_child(a, c);
+    world.add_child(a, d);
+
+    assert_eq!(world.query_filtered::<Children, With<Parent>>().iter().next().unwrap().iter().count(), 3);
+    world.despawn(a);
+    assert_eq!(world.query::<Entity>().iter().count(), 0);
+
+    schedule.add_system(|mut commands: Commands, query: Query<Entity, With<Parent>>| {
+        for entity in query.iter() {
+            let child = commands.spawn(Child);
+            commands.add_child(entity, child);
+        }
+    });
+
+    world.spawn(Parent);
+    world.spawn(Parent);
+    world.spawn(Parent);
+    schedule.run(&mut world);
+
+    for children in world.query_filtered::<Children, With<Parent>>().iter() {
+        assert!(children.len() == 1);
+    }
+
+    let mut schedule = Schedule::default();
+    schedule.add_system(|mut commands: Commands, query: Query<Entity, With<Parent>>| {
+        for entity in query.iter() {
+            commands.remove_children(entity);
+        }
+    });
+
+    schedule.run(&mut world);
+
+    for children in world.query_filtered::<Children, With<Parent>>().iter() {
+        assert!(children.is_empty());
+    }
+
+    let mut world = World::default();
+    let mut schedule = Schedule::default();
+    let sys_a = schedule.add_system(|| panic!());
+    let sys_b = schedule.add_system(|| panic!());
+
+    let parent = world.spawn(Parent);
+    let child_a = world.spawn(Child);
+    let child_b = world.spawn(Child);
+    let child_c = world.spawn(System(sys_a));
+    let child_d = world.spawn(System(sys_b));
+    world.add_child(parent, child_a);
+    world.add_child(parent, child_b);
+    world.add_child(child_a, child_c);
+    world.add_child(child_b, child_d);
+    world.despawn(parent);
+    schedule.run(&mut world);
+}
+
+#[test]
+fn entites() {
+    #[derive(Component)] struct A;
+    #[derive(Component)] struct B;
+    #[derive(Component)] struct C;
+    #[derive(Component)] struct D;
+    #[derive(Component)] struct E;
+    #[derive(Component)] struct F;
+    #[derive(Component)] struct G;
+
+    let mut world = World::default();
+
+    let a = world.spawn(A);
+    let b = world.spawn(B);
+    let c = world.spawn(C);
+    let d = world.spawn(D);
+    let e = world.spawn(E);
+    let f = world.spawn(F);
+    let g = world.spawn(G);
+
+    let old_b = b;
+    let old_d = d;
+    let old_f = f;
+
+    assert!(world.query_filtered::<Entity, With<A>>().iter().next().unwrap() == a);
+    assert!(world.query_filtered::<Entity, With<B>>().iter().next().unwrap() == b);
+    assert!(world.query_filtered::<Entity, With<C>>().iter().next().unwrap() == c);
+    assert!(world.query_filtered::<Entity, With<D>>().iter().next().unwrap() == d);
+    assert!(world.query_filtered::<Entity, With<E>>().iter().next().unwrap() == e);
+    assert!(world.query_filtered::<Entity, With<F>>().iter().next().unwrap() == f);
+    assert!(world.query_filtered::<Entity, With<G>>().iter().next().unwrap() == g);
+
+    assert!(world.is_alive(a) && world.is_alive(b) && world.is_alive(c) && world.is_alive(d) && world.is_alive(e) && world.is_alive(f) && world.is_alive(g));
+
+    world.despawn(b);
+    world.despawn(d);
+    world.despawn(f);
+
+    assert!(world.is_alive(a) && !world.is_alive(b) && world.is_alive(c) && !world.is_alive(d) && world.is_alive(e) && !world.is_alive(f) && world.is_alive(g));
+
+    assert!(world.query_filtered::<Entity, With<A>>().iter().next().unwrap() == a);
+    assert!(world.query_filtered::<Entity, With<B>>().iter().next().is_none());
+    assert!(world.query_filtered::<Entity, With<C>>().iter().next().unwrap() == c);
+    assert!(world.query_filtered::<Entity, With<D>>().iter().next().is_none());
+    assert!(world.query_filtered::<Entity, With<E>>().iter().next().unwrap() == e);
+    assert!(world.query_filtered::<Entity, With<F>>().iter().next().is_none());
+    assert!(world.query_filtered::<Entity, With<G>>().iter().next().unwrap() == g);
+
+    let f = world.spawn(B);
+    let d = world.spawn(D);
+    let b = world.spawn(F);
+
+
+    assert!(world.query_filtered::<Entity, With<A>>().iter().next().unwrap() == a);
+    assert!(world.query_filtered::<Entity, With<B>>().iter().next().unwrap() == f);
+    assert!(world.query_filtered::<Entity, With<C>>().iter().next().unwrap() == c);
+    assert!(world.query_filtered::<Entity, With<D>>().iter().next().unwrap() == d);
+    assert!(world.query_filtered::<Entity, With<E>>().iter().next().unwrap() == e);
+    assert!(world.query_filtered::<Entity, With<F>>().iter().next().unwrap() == b);
+    assert!(world.query_filtered::<Entity, With<G>>().iter().next().unwrap() == g);
+
+    assert!(world.is_alive(a) && world.is_alive(b) && world.is_alive(c) && world.is_alive(d) && world.is_alive(e) && world.is_alive(f) && world.is_alive(g));
+
+    assert!(!world.is_alive(old_b) && !world.is_alive(old_d) && !world.is_alive(old_f));
+
+    world.despawn(a);
+    world.despawn(b);
+    world.despawn(c);
+    world.despawn(d);
+    world.despawn(e);
+    world.despawn(f);
+    world.despawn(g);
+
+    assert!(!world.is_alive(a) && !world.is_alive(b) && !world.is_alive(c) && !world.is_alive(d) && !world.is_alive(e) && !world.is_alive(f) && !world.is_alive(g));
+
+    world.spawn(A);
+
+    assert!(!world.is_alive(a));
+    assert!(!world.is_alive(b));
+    assert!(!world.is_alive(c));
+    assert!(!world.is_alive(d));
+    assert!(!world.is_alive(e));
+    assert!(!world.is_alive(f));
+    assert!(!world.is_alive(g));
+    assert!(!world.is_alive(old_b));
+    assert!(!world.is_alive(old_f));
+    assert!(!world.is_alive(old_d));
+
 }

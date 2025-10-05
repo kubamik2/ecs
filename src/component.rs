@@ -2,6 +2,7 @@ use std::{any::TypeId, collections::{hash_map::Entry, HashMap}, ops::BitOrAssign
 
 use crate::{Commands, Entity, World, bitmap::Bitmap, storage::{ptr::PtrMut, sparse_set::{SparseSet, blob_sparse_set::BlobSparseSet}}};
 
+#[allow(unused)]
 pub trait Component: Send + Sync + 'static + Sized {
     fn on_add(&mut self, commands: &mut Commands) {}
     fn on_remove(&mut self, commands: &mut Commands) {}
@@ -217,17 +218,16 @@ impl Components {
 
 
 pub trait ComponentBundle {
-    fn spawn(self, world: &mut World) -> Entity;
+    fn spawn(self, entity: Entity, world: &mut World);
     fn signature(world: &mut World) -> Signature;
 }
 
 impl<C: Component + 'static> ComponentBundle for C {
-    fn spawn(self, world: &mut World) -> Entity {
+    fn spawn(self, entity: Entity, world: &mut World) {
         let signature = world.register_component::<C>().as_signature();
         unsafe {
-            let entity = world.spawn_with_signature(signature);
+            world.insert_empty_entity(entity, signature);
             world.set_component_unchecked(entity, self);
-            entity
         }
     }
 
@@ -236,17 +236,16 @@ impl<C: Component + 'static> ComponentBundle for C {
     }
 }
 
-macro_rules! bundle_typle_impl {
+macro_rules! bundle_tuple_impl {
     ($(($idx:tt, $name:ident)),+) => {
         impl<$($name: Component + 'static),+> ComponentBundle for ($($name),+) {
-            fn spawn(self, world: &mut World) -> Entity {
+            fn spawn(self, entity: Entity, world: &mut World) {
                 let data = self;
                 let mut signature = Bitmap::new();
                 $(signature |= world.register_component::<$name>().as_signature();)+
                 unsafe {
-                    let entity = world.spawn_with_signature(signature);
+                    world.insert_empty_entity(entity, signature);
                     $(world.set_component_unchecked(entity, data.$idx));+;
-                    entity
                 }
             }
 
@@ -260,8 +259,8 @@ macro_rules! bundle_typle_impl {
 }
 
 impl ComponentBundle for () {
-    fn spawn(self, world: &mut World) -> Entity {
-        unsafe { world.spawn_with_signature(Signature::new()) }
+    fn spawn(self, entity: Entity, world: &mut World) {
+        unsafe { world.insert_empty_entity(entity, Signature::new()) };
     }
 
     fn signature(_: &mut World) -> Signature {
@@ -269,4 +268,4 @@ impl ComponentBundle for () {
     }
 }
 
-variadics_please::all_tuples_enumerated!{bundle_typle_impl, 2, 32, C}
+variadics_please::all_tuples_enumerated!{bundle_tuple_impl, 2, 32, C}

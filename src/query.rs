@@ -1,6 +1,6 @@
-use crate::{param::SystemParam, system::SystemHandle, world::WorldPtr, ComponentBundle, ComponentId, Signature};
+use crate::{ComponentBundle, ComponentId, Signature, param::SystemParam, system::SystemHandle, world::WorldPtr};
 use super::{access::Access, Component, Entity, World};
-use std::{any::TypeId, collections::HashSet, marker::PhantomData, mem::MaybeUninit};
+use std::{any::TypeId, collections::HashSet, marker::PhantomData, mem::MaybeUninit, ops::Deref};
 
 const QUERY_MAX_VARIADIC_COUNT: usize = 32;
 
@@ -326,6 +326,38 @@ impl<C: Component> QueryItem for Option<&mut C> {
     fn join_component_access(world: &mut World, component_access: &mut Access) {
         component_access.mutable.set(world.register_component::<C>().get());
         component_access.mutable_count += 1;
+    }
+}
+
+pub struct Children<'a>(&'a [Entity]);
+
+impl<'a> Deref for Children<'a> {
+    type Target = [Entity];
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
+impl QueryItem for Children<'_> {
+    type ItemRef<'a> = Children<'a>;
+    type ItemMut<'a> = Children<'a>;
+
+    #[inline]
+    unsafe fn fetch_ref(world_ptr: WorldPtr<'_>, entity: Entity, _: ComponentId) -> Self::ItemRef<'_> {
+        Children(unsafe { world_ptr.as_world() }.children(entity))
+    }
+
+    #[inline]
+    unsafe fn fetch_mut(world_ptr: WorldPtr<'_>, entity: Entity, _: ComponentId) -> Self::ItemMut<'_> {
+        Children(unsafe { world_ptr.as_world() }.children(entity))
+    }
+
+    fn component_id_or_init(_: &mut World) -> ComponentId {
+        unsafe { std::mem::transmute(usize::MAX) }
+    }
+
+    fn component_id(_: &World) -> ComponentId {
+        unsafe { std::mem::transmute(usize::MAX) }
     }
 }
 
