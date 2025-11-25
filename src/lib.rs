@@ -22,7 +22,7 @@ pub use query::{Query, QueryData, Without, With, QueryFilter, Children};
 pub use resource::{Res, ResMut, ResourceId, Changed, Resource};
 pub use derive::{Component, Resource, ScheduleLabel};
 pub use schedule::{Schedule, ScheduleLabel};
-pub use system::{Commands, SystemHandle, SystemInput, IntoSystem, SystemId, Local};
+pub use system::{Commands, SystemHandle, SystemInput, IntoSystem, SystemId, Local, System};
 pub use signal::Signal;
 pub use event::{Event, EventReader, EventReadWriter, EventQueue, EventReaderState};
 pub use entity::Entity;
