@@ -1,6 +1,6 @@
 use std::{any::TypeId, marker::PhantomData, ops::{Deref, DerefMut}, ptr::{self, NonNull}};
 
-use crate::{observer::{ObserverInput, Observers, SignalInput}, query::QueryData, resource::{Changed, ResourceId}, schedule::Schedules, system::{IntoSystem, System, SystemId}, *};
+use crate::{observer::{ObserverInput, Observers, TriggerInput}, query::QueryData, resource::{Changed, ResourceId}, schedule::Schedules, system::{IntoSystem, System, SystemId}, *};
 
 static WORLD_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -398,18 +398,18 @@ impl World {
         self.entities.children(entity)
     }
 
-    // ===== Signals =====
+    // ===== Triggers =====
     
 
-    pub(crate) fn send_signal_from_system<E: Event>(&mut self, event: E, target: Option<Entity>) {
+    pub(crate) fn trigger_from_system<E: Event>(&mut self, event: E, target: Option<Entity>) {
         let mut world_ptr = self.world_ptr_mut();
-        unsafe { world_ptr.as_world_mut() }.observers.send_signal(event, target, world_ptr);
+        unsafe { world_ptr.as_world_mut() }.observers.trigger(event, target, world_ptr);
     }
 
-    pub fn send_signal<E: Event>(&mut self, event: E, target: Option<Entity>) {
+    pub fn trigger<E: Event>(&mut self, event: E, target: Option<Entity>) {
         self.remove_dead_observers();
         let mut world_ptr = self.world_ptr_mut();
-        unsafe { world_ptr.as_world_mut() }.observers.send_signal(event, target, world_ptr);
+        unsafe { world_ptr.as_world_mut() }.observers.trigger(event, target, world_ptr);
     }
 
 
@@ -417,12 +417,12 @@ impl World {
 
 
     #[inline]
-    pub fn add_observer<ParamIn: ObserverInput, S: IntoSystem<ParamIn, SignalInput> + 'static>(&mut self, system: S) -> SystemId {
+    pub fn add_observer<ParamIn: ObserverInput, S: IntoSystem<ParamIn, TriggerInput> + 'static>(&mut self, system: S) -> SystemId {
         self.observers.add_observer(system)
     }
 
     #[inline]
-    pub fn add_observer_with_id<ParamIn: ObserverInput, S: IntoSystem<ParamIn, SignalInput> + 'static>(&mut self, system: S, id: SystemId) {
+    pub fn add_observer_with_id<ParamIn: ObserverInput, S: IntoSystem<ParamIn, TriggerInput> + 'static>(&mut self, system: S, id: SystemId) {
         let boxed_system = Box::new(system.into_system_with_id(id));
         self.observers.add_boxed_observer(boxed_system);
     }
@@ -533,7 +533,7 @@ impl<R: Resource> Drop for WorldResMut<'_, R> {
         let world = unsafe { self.world_ptr.as_world_mut() };
         if self.was_modified {
             world.send_event(Changed::<R>::new());
-            world.send_signal(Changed::<R>::new(), None);
+            world.trigger(Changed::<R>::new(), None);
         }
     }
 }

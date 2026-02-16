@@ -219,7 +219,7 @@ impl<R: Resource + Send + Sync + 'static> SystemParam for ResMut<'_, R> {
     fn after(commands: &mut Commands, state: &mut Self::State) {
         if state.1 {
             commands.send_event(Changed::<R>(PhantomData));
-            commands.send_signal(Changed::<R>(PhantomData), None);
+            commands.trigger(Changed::<R>(PhantomData), None);
             state.1 = false;
         }
     }
@@ -265,7 +265,7 @@ impl<R: Resource + Send + Sync + 'static> SystemParam for Option<ResMut<'_, R>> 
     fn after(commands: &mut Commands, state: &mut Self::State) {
         if state.1 {
             commands.send_event(Changed::<R>(PhantomData));
-            commands.send_signal(Changed::<R>(PhantomData), None);
+            commands.trigger(Changed::<R>(PhantomData), None);
             state.1 = false;
         }
     }

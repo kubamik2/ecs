@@ -1,32 +1,32 @@
-use crate::{access::Access, param::SystemParam, signal::Signal, system::{System, SystemFunc, SystemHandle, Commands}, world::WorldPtr, Entity, Event, IntoSystem, SystemId, World};
+use crate::{access::Access, param::SystemParam, trigger::Trigger, system::{System, SystemFunc, SystemHandle, Commands}, world::WorldPtr, Entity, Event, IntoSystem, SystemId, World};
 use std::{any::TypeId, collections::HashMap, ptr::NonNull};
 
 #[derive(Default)]
 pub struct Observers {
-    event_to_systems: HashMap<TypeId, Vec<NonNull<dyn System<Input = SignalInput> + Send + Sync>>>,
-    systems: Vec<Box<dyn System<Input = SignalInput> + Send + Sync>>,
+    event_to_systems: HashMap<TypeId, Vec<NonNull<dyn System<Input = TriggerInput> + Send + Sync>>>,
+    systems: Vec<Box<dyn System<Input = TriggerInput> + Send + Sync>>,
 }
 
 impl Observers {
-    pub(crate) fn add_observer<ParamIn: ObserverInput, S: IntoSystem<ParamIn, SignalInput> + 'static>(&mut self, system: S) -> SystemId {
-        let mut system: Box<dyn System<Input = SignalInput> + Send + Sync> = Box::new(system.into_system());
-        let event_type_id = *system.signal_access().expect("observer does not have signal access");
+    pub(crate) fn add_observer<ParamIn: ObserverInput, S: IntoSystem<ParamIn, TriggerInput> + 'static>(&mut self, system: S) -> SystemId {
+        let mut system: Box<dyn System<Input = TriggerInput> + Send + Sync> = Box::new(system.into_system());
+        let event_type_id = *system.trigger_access().expect("observer does not have trigger access");
         let system_id = system.id().clone();
         self.event_to_systems.entry(event_type_id).or_default().push(NonNull::from(system.as_mut()));
         self.systems.push(system);
         system_id
     }
 
-    pub(crate) fn add_boxed_observer<S: System<Input = SignalInput> + Send + Sync + 'static>(&mut self, mut system: Box<S>) -> SystemId {
-        let event_type_id = *system.signal_access().expect("observer does not have signal access");
+    pub(crate) fn add_boxed_observer<S: System<Input = TriggerInput> + Send + Sync + 'static>(&mut self, mut system: Box<S>) -> SystemId {
+        let event_type_id = *system.trigger_access().expect("observer does not have trigger access");
         let system_id = system.id().clone();
         self.event_to_systems.entry(event_type_id).or_default().push(NonNull::from(system.as_mut()));
         self.systems.push(system);
         system_id
     }
 
-    pub(crate) fn send_signal<E: Event>(&mut self, mut event: E, target: Option<Entity>, mut world_ptr: WorldPtr<'_>) {
-        let signal_input = SignalInput {
+    pub(crate) fn trigger<E: Event>(&mut self, mut event: E, target: Option<Entity>, mut world_ptr: WorldPtr<'_>) {
+        let trigger_input = TriggerInput {
             event: NonNull::from(&mut event).cast::<()>(),
             target,
         };
@@ -38,7 +38,7 @@ impl Observers {
             if !system.is_init() {
                 system.init(unsafe { world_ptr.as_world_mut() });
             }
-            system.execute(world_ptr, signal_input);
+            system.execute(world_ptr, trigger_input);
             system.after(unsafe { world_ptr.as_world_mut() }.command_buffer());
         }
         unsafe { world_ptr.as_world_mut() }.process_command_buffer();
@@ -48,7 +48,7 @@ impl Observers {
         let mut i = 0;
         while i < self.systems.len() {
             let id = self.systems[i].id();
-            let event_type_id = self.systems[i].signal_access().expect("observer no signal access");
+            let event_type_id = self.systems[i].trigger_access().expect("observer no trigger access");
             if !id.is_alive() {
                 let system_ptrs = self.event_to_systems.get_mut(event_type_id).expect("dangling event");
 
@@ -67,19 +67,19 @@ impl Observers {
 }
 
 #[derive(Clone, Copy)]
-pub struct SignalInput {
+pub struct TriggerInput {
     pub event: NonNull<()>,
     pub target: Option<Entity>,
 }
 
 pub trait ObserverInput {}
 
-impl<E: Event> ObserverInput for Signal<'_, E> {}
+impl<E: Event> ObserverInput for Trigger<'_, E> {}
 
 macro_rules! observer_input_impl {
     ($($param:ident),+) => {
         #[allow(unused_parens)]
-        impl<'a, E: Event, $($param: SystemParam),+> ObserverInput for (Signal<'a, E>, $($param),+) {}
+        impl<'a, E: Event, $($param: SystemParam),+> ObserverInput for (Trigger<'a, E>, $($param),+) {}
     }
 }
 
@@ -88,23 +88,23 @@ variadics_please::all_tuples!{observer_input_impl, 1, 31, In}
 macro_rules! observer_func_impl {
     ($(($i:tt, $param:ident, $p:ident)),+) => {
         #[allow(unused_parens)]
-        impl<'b, E: Event, F, $($param),+> SystemFunc<(Signal<'b, E>, $($param),+), SignalInput> for F where
+        impl<'b, E: Event, F, $($param),+> SystemFunc<(Trigger<'b, E>, $($param),+), TriggerInput> for F where
             F: Send + Sync + 'static,
             for<'a> &'a F: 
-                FnMut(Signal<'a, E>, $($param),+) +
-                FnMut(Signal<'a, E>, $($param::Item<'a>),+),
+                FnMut(Trigger<'a, E>, $($param),+) +
+                FnMut(Trigger<'a, E>, $($param::Item<'a>),+),
             $($param: for<'a> SystemParam + 'static),+
         {
             type State = ($($param::State),+);
-            fn run<'a>(&self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, input: SignalInput, system_meta: SystemHandle) {
+            fn run<'a>(&self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, input: TriggerInput, system_meta: SystemHandle) {
                 #[allow(clippy::too_many_arguments)]
-                fn call<'a, E: Event, $($param),+>(mut f: impl FnMut(Signal<'a, E>, $($param),+), s: Signal<'a, E>, $($p:$param),+) {
+                fn call<'a, E: Event, $($param),+>(mut f: impl FnMut(Trigger<'a, E>, $($param),+), s: Trigger<'a, E>, $($p:$param),+) {
                     f(s, $($p),+);
                 }
                 unsafe {
                     $(let $p = $param::fetch(world_ptr, &mut state.$i, &system_meta);)+
-                    let signal = Signal::fetch(world_ptr, input);
-                    call(self, signal, $($p),+);
+                    let trigger = Trigger::fetch(world_ptr, input);
+                    call(self, trigger, $($p),+);
                 }
             }
             
@@ -124,7 +124,7 @@ macro_rules! observer_func_impl {
                 ($($param::init_state(world, &system_handle)),+)
             }
 
-            fn signal_access() -> Option<TypeId> {
+            fn trigger_access() -> Option<TypeId> {
                 Some(TypeId::of::<E>())
             }
 
@@ -137,22 +137,22 @@ macro_rules! observer_func_impl {
 
 variadics_please::all_tuples_enumerated!{observer_func_impl, 2, 31, In, p}
 
-impl<E: Event, F, In> SystemFunc<(Signal<'_, E>, In), SignalInput> for F where 
+impl<E: Event, F, In> SystemFunc<(Trigger<'_, E>, In), TriggerInput> for F where 
     F: Send + Sync + 'static,
     for<'a> &'a F:
-        FnMut(Signal<'a, E>, In) +
-        FnMut(Signal<'a, E>, In::Item<'a>),
+        FnMut(Trigger<'a, E>, In) +
+        FnMut(Trigger<'a, E>, In::Item<'a>),
     In: for<'a> SystemParam + 'static,
 {
     type State = In::State;
-    fn run<'a>(&self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, input: SignalInput, system_meta: SystemHandle) {
-        fn call<'a, E: Event, In>(mut f: impl FnMut(Signal<'a, E>, In), s: Signal<'a, E>, p: In) {
+    fn run<'a>(&self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, input: TriggerInput, system_meta: SystemHandle) {
+        fn call<'a, E: Event, In>(mut f: impl FnMut(Trigger<'a, E>, In), s: Trigger<'a, E>, p: In) {
             f(s, p)
         }
         unsafe {
             let p = In::fetch(world_ptr, state, &system_meta);
-            let signal = Signal::fetch(world_ptr, input);
-            call(self, signal, p);
+            let trigger = Trigger::fetch(world_ptr, input);
+            call(self, trigger, p);
         }
     }
 
@@ -172,7 +172,7 @@ impl<E: Event, F, In> SystemFunc<(Signal<'_, E>, In), SignalInput> for F where
         In::init_state(world, &system_handle)
     }
 
-    fn signal_access() -> Option<TypeId> {
+    fn trigger_access() -> Option<TypeId> {
         Some(TypeId::of::<E>())
     }
 
@@ -181,17 +181,17 @@ impl<E: Event, F, In> SystemFunc<(Signal<'_, E>, In), SignalInput> for F where
     }
 }
 
-impl<E: Event, F> SystemFunc<Signal<'_, E>, SignalInput> for F where 
+impl<E: Event, F> SystemFunc<Trigger<'_, E>, TriggerInput> for F where 
     F: Send + Sync + 'static,
-    for<'a> &'a F: FnMut(Signal<'a, E>)
+    for<'a> &'a F: FnMut(Trigger<'a, E>)
 {
     type State = ();
-    fn run<'a>(&self, world_ptr: WorldPtr<'a>, _: &'a mut Self::State, input: SignalInput, _: SystemHandle) {
-        fn call<'a, E: Event>(mut f: impl FnMut(Signal<'a, E>), s: Signal<'a, E>) {
+    fn run<'a>(&self, world_ptr: WorldPtr<'a>, _: &'a mut Self::State, input: TriggerInput, _: SystemHandle) {
+        fn call<'a, E: Event>(mut f: impl FnMut(Trigger<'a, E>), s: Trigger<'a, E>) {
             f(s)
         }
-        let signal = unsafe { Signal::fetch(world_ptr, input) };
-        call(self, signal);
+        let trigger = unsafe { Trigger::fetch(world_ptr, input) };
+        call(self, trigger);
     }
 
     fn join_component_access(_: &mut World, _: &mut Access) {}
@@ -204,7 +204,7 @@ impl<E: Event, F> SystemFunc<Signal<'_, E>, SignalInput> for F where
 
     fn init_state(_: &mut World, _: SystemHandle) -> Self::State {}
 
-    fn signal_access() -> Option<TypeId> {
+    fn trigger_access() -> Option<TypeId> {
         Some(TypeId::of::<E>())
     }
 

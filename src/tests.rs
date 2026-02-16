@@ -166,13 +166,13 @@ fn simple_observer() {
     let mut world = World::default();
     world.insert_resource(Count(0));
     for _ in 0..2 {
-        world.add_observer(|_: Signal<Tick>, mut count: ResMut<Count>| {
+        world.add_observer(|_: Trigger<Tick>, mut count: ResMut<Count>| {
             count.0 += 1;
         });
     }
 
     for _ in 0..100 {
-        world.send_signal(Tick, None);
+        world.trigger(Tick, None);
     }
 
     assert!(world.resource::<Count>().0 == 200);
@@ -223,7 +223,7 @@ fn change_detection() {
     struct Count(u32);
     let mut world = World::default();
     world.insert_resource(Count(0));
-    world.add_observer(|_: Signal<Changed<Count>>| {
+    world.add_observer(|_: Trigger<Changed<Count>>| {
         X.fetch_add(1, Ordering::Relaxed);
     });
     let mut schedule = Schedule::default();
@@ -373,18 +373,18 @@ fn recurent_commands() {
 
     let mut world = World::default();
 
-    world.add_observer(|_: Signal<A>, mut commands: Commands| {commands.insert_resource(SuccessA); commands.send_signal(B, None);});
-    world.add_observer(|_: Signal<B>, mut commands: Commands| {commands.insert_resource(SuccessB); commands.send_signal(C, None);});
-    world.add_observer(|_: Signal<C>, mut commands: Commands| {commands.insert_resource(SuccessC); commands.send_signal(D, None);});
-    world.add_observer(|_: Signal<D>, mut commands: Commands| {commands.insert_resource(SuccessD); commands.send_signal(E, None);});
-    world.add_observer(|_: Signal<E>, mut commands: Commands| {commands.insert_resource(SuccessE); commands.send_signal(F, None);});
-    world.add_observer(|_: Signal<F>, mut commands: Commands| {commands.insert_resource(SuccessF); commands.send_signal(G, None);});
-    world.add_observer(|_: Signal<G>, mut commands: Commands| {commands.insert_resource(SuccessG); commands.send_signal(H, None);});
-    world.add_observer(|_: Signal<H>, mut commands: Commands| {commands.insert_resource(SuccessH); commands.send_signal(I, None);});
-    world.add_observer(|_: Signal<I>, mut commands: Commands| {commands.insert_resource(SuccessI); commands.send_signal(J, None);});
-    world.add_observer(|_: Signal<J>, mut commands: Commands| {commands.insert_resource(SuccessJ);});
+    world.add_observer(|_: Trigger<A>, mut commands: Commands| {commands.insert_resource(SuccessA); commands.trigger(B, None);});
+    world.add_observer(|_: Trigger<B>, mut commands: Commands| {commands.insert_resource(SuccessB); commands.trigger(C, None);});
+    world.add_observer(|_: Trigger<C>, mut commands: Commands| {commands.insert_resource(SuccessC); commands.trigger(D, None);});
+    world.add_observer(|_: Trigger<D>, mut commands: Commands| {commands.insert_resource(SuccessD); commands.trigger(E, None);});
+    world.add_observer(|_: Trigger<E>, mut commands: Commands| {commands.insert_resource(SuccessE); commands.trigger(F, None);});
+    world.add_observer(|_: Trigger<F>, mut commands: Commands| {commands.insert_resource(SuccessF); commands.trigger(G, None);});
+    world.add_observer(|_: Trigger<G>, mut commands: Commands| {commands.insert_resource(SuccessG); commands.trigger(H, None);});
+    world.add_observer(|_: Trigger<H>, mut commands: Commands| {commands.insert_resource(SuccessH); commands.trigger(I, None);});
+    world.add_observer(|_: Trigger<I>, mut commands: Commands| {commands.insert_resource(SuccessI); commands.trigger(J, None);});
+    world.add_observer(|_: Trigger<J>, mut commands: Commands| {commands.insert_resource(SuccessJ);});
 
-    world.send_signal(A, None);
+    world.trigger(A, None);
 
     assert!(world.get_resource::<SuccessA>().is_some());
     assert!(world.get_resource::<SuccessB>().is_some());

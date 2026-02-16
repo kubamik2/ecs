@@ -40,7 +40,7 @@ pub trait System {
     fn execute(&mut self, world_ptr: WorldPtr<'_>, input: Self::Input);
     fn component_access(&self) -> &Access;
     fn resource_access(&self) -> &Access;
-    fn signal_access(&self) -> Option<&TypeId>;
+    fn trigger_access(&self) -> Option<&TypeId>;
     fn init(&mut self, world: &mut World);
     fn is_init(&self) -> bool;
     fn after(&mut self, commands: Commands);
@@ -52,7 +52,7 @@ pub struct FunctionSystem<ParamIn, Input, F: SystemFunc<ParamIn, Input>> {
     state: Option<F::State>,
     component_access: Option<Access>,
     resource_access: Option<Access>,
-    signal_access: Option<TypeId>,
+    trigger_access: Option<TypeId>,
     is_init: bool,
     func: F,
     _a: std::marker::PhantomData<ParamIn>,
@@ -96,8 +96,8 @@ impl<Input, ParamIn, F: SystemFunc<ParamIn, Input>> System for FunctionSystem<Pa
     }
 
     #[inline]
-    fn signal_access(&self) -> Option<&TypeId> {
-        self.signal_access.as_ref()
+    fn trigger_access(&self) -> Option<&TypeId> {
+        self.trigger_access.as_ref()
     }
 
     #[inline]
@@ -145,7 +145,7 @@ pub trait SystemFunc<ParamIn, Input> {
     fn run<'a>(&'a self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, input: Input, system_meta: SystemHandle<'a>);
     fn join_component_access(world: &mut World, component_access: &mut Access);
     fn join_resource_access(world: &mut World, resource_access: &mut Access);
-    fn signal_access() -> Option<TypeId>;
+    fn trigger_access() -> Option<TypeId>;
     fn init_state(world: &mut World, system_handle: SystemHandle) -> Self::State;
     fn after<'state>(commands: Commands<'state>, state: &'state mut Self::State);
 }
@@ -170,7 +170,7 @@ impl<F, Input> SystemFunc<(), Input> for F where
     fn join_component_access(_: &mut World, _: &mut Access) {}
 
     #[inline]
-    fn signal_access() -> Option<TypeId> {
+    fn trigger_access() -> Option<TypeId> {
         None
     }
 
@@ -224,7 +224,7 @@ impl<F, ParamIn, Input> SystemFunc<ParamIn, Input> for F where
     }
 
     #[inline]
-    fn signal_access() -> Option<TypeId> {
+    fn trigger_access() -> Option<TypeId> {
         None
     }
 
@@ -272,7 +272,7 @@ macro_rules! system_func_impl {
                 ($($param::init_state(world, &system_handle)),+)
             }
 
-            fn signal_access() -> Option<TypeId> {
+            fn trigger_access() -> Option<TypeId> {
                 None
             }
 
@@ -305,7 +305,7 @@ where
             state: None,
             component_access: None,
             resource_access: None,
-            signal_access: F::signal_access(),
+            trigger_access: F::trigger_access(),
             is_init: false,
             func: self,
             _a: Default::default(),
@@ -319,7 +319,7 @@ where
             state: None,
             component_access: None,
             resource_access: None,
-            signal_access: F::signal_access(),
+            trigger_access: F::trigger_access(),
             is_init: false,
             func: self,
             _a: Default::default(),

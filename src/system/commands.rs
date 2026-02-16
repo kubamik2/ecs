@@ -1,4 +1,4 @@
-use crate::{Component, ComponentBundle, Entity, Event, IntoSystem, ObserverInput, Resource, ResourceId, ScheduleLabel, SignalInput, SystemInput, World, entity::Entities, param::SystemParam, world::WorldPtr};
+use crate::{Component, ComponentBundle, Entity, Event, IntoSystem, ObserverInput, Resource, ResourceId, ScheduleLabel, TriggerInput, SystemInput, World, entity::Entities, param::SystemParam, world::WorldPtr};
 
 use super::{SystemHandle, SystemId};
 
@@ -23,7 +23,7 @@ enum CommandMeta {
         f: fn(&mut World, Entity),
         entity: Entity,
     },
-    SendSignal {
+    SendTrigger {
         f: fn(&mut World, *mut u8, Option<Entity>),
         target: Option<Entity>,
         data_size: usize,
@@ -145,16 +145,16 @@ impl Commands<'_> {
         self.copy_data(command_meta, index);
     }
 
-    pub fn send_signal<E: Event>(&mut self, event: E, target: Option<Entity>) {
+    pub fn trigger<E: Event>(&mut self, event: E, target: Option<Entity>) {
         let additional = size_of::<CommandMeta>() + size_of::<E>();
         let index = self.queue.len();
         self.queue.resize(self.queue.len() + additional, 0);
 
-        let command_meta = CommandMeta::SendSignal {
+        let command_meta = CommandMeta::SendTrigger {
             f: |world, data, target| {
                 let data = data as *mut E;
                 let event = unsafe { data.read_unaligned() };
-                world.send_signal_from_system(event, target);
+                world.trigger_from_system(event, target);
             },
             target,
             data_size: size_of::<E>(),
@@ -238,7 +238,7 @@ impl Commands<'_> {
         system_id
     }
 
-    pub fn add_observer<ParamIn: ObserverInput, S: IntoSystem<ParamIn, SignalInput> + 'static>(&mut self, system: S) -> SystemId {
+    pub fn add_observer<ParamIn: ObserverInput, S: IntoSystem<ParamIn, TriggerInput> + 'static>(&mut self, system: S) -> SystemId {
         let additional = size_of::<CommandMeta>() + size_of::<S>();
         let index = self.queue.len();
         self.queue.resize(self.queue.len() + additional, 0);
@@ -350,7 +350,7 @@ impl Commands<'_> {
                 CommandMeta::RemoveComponent { f, entity } => {
                     (f)(world, entity);
                 },
-                CommandMeta::SendSignal { f, target, data_size } => {
+                CommandMeta::SendTrigger { f, target, data_size } => {
                     let ptr = unsafe { (&mut queue[0] as *mut u8).add(cursor) };
                     (f)(world, ptr, target);
                     cursor += data_size;
