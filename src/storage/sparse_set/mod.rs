@@ -11,13 +11,14 @@ impl TypelessSparseSet {
         Self {
             sparse_set: Box::new(SyncUnsafeCell::new(sparse_set)),
             remove_ptr: |sparse_set, id| {
-                unsafe { sparse_set.downcast_mut_unchecked::<SyncUnsafeCell<SparseSet<T>>>().get_mut() }.remove(id);
+                unsafe { sparse_set.downcast_unchecked_mut::<SyncUnsafeCell<SparseSet<T>>>().get_mut() }.remove(id);
             },
         }
     }
 
     #[inline]
-    pub unsafe fn downcast_unchecked<T: 'static>(&self) -> &SyncUnsafeCell<SparseSet<T>> { unsafe { self.sparse_set.downcast_ref_unchecked::<SyncUnsafeCell<SparseSet<T>>>() }
+    pub unsafe fn downcast_unchecked<T: 'static>(&self) -> &SyncUnsafeCell<SparseSet<T>> {
+        unsafe { self.sparse_set.downcast_unchecked_ref::<SyncUnsafeCell<SparseSet<T>>>() }
     }
 
     #[inline]

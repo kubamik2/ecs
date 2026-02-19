@@ -179,7 +179,7 @@ pub struct Schedules(HashMap<TypeId, Box<dyn Any>>);
 impl Schedules {
     pub fn get_mut<L: ScheduleLabel>(&mut self, label: &L) -> Option<&mut Schedule> {
         let boxed_type_schedules = self.0.get_mut(&TypeId::of::<L>())?;
-        let type_schedules = unsafe { boxed_type_schedules.downcast_mut_unchecked::<HashMap<L, Schedule>>() };
+        let type_schedules = unsafe { boxed_type_schedules.downcast_unchecked_mut::<HashMap<L, Schedule>>() };
         type_schedules.get_mut(label)
     }
 
@@ -187,13 +187,13 @@ impl Schedules {
         let boxed_type_schedules = self.0
             .entry(TypeId::of::<L>())
             .or_insert(Box::new(HashMap::<L, Schedule>::default()));
-        let type_schedules = unsafe { boxed_type_schedules.downcast_mut_unchecked::<HashMap<L, Schedule>>() };
+        let type_schedules = unsafe { boxed_type_schedules.downcast_unchecked_mut::<HashMap<L, Schedule>>() };
         type_schedules.insert(label, schedule);
     }
 
     pub fn remove<L: ScheduleLabel>(&mut self, label: &L) -> Option<Schedule> {
         let boxed_type_schedules = self.0.get_mut(&TypeId::of::<L>())?;
-        let type_schedules = unsafe { boxed_type_schedules.downcast_mut_unchecked::<HashMap<L, Schedule>>() };
+        let type_schedules = unsafe { boxed_type_schedules.downcast_unchecked_mut::<HashMap<L, Schedule>>() };
         let res = type_schedules.remove(label);
 
         if type_schedules.is_empty() {
@@ -205,7 +205,7 @@ impl Schedules {
 
     pub fn get_or_default<L: ScheduleLabel>(&mut self, label: L) -> &mut Schedule {
         let boxed_type_schedules = self.0.entry(TypeId::of::<L>()).or_insert_with(|| Box::new(HashMap::<L, Schedule>::default()));
-        let type_schedules = unsafe { boxed_type_schedules.downcast_mut_unchecked::<HashMap<L, Schedule>>() };
+        let type_schedules = unsafe { boxed_type_schedules.downcast_unchecked_mut::<HashMap<L, Schedule>>() };
         type_schedules.entry(label).or_default()
     }
 }

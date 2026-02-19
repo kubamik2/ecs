@@ -48,14 +48,14 @@ impl Resources {
     pub fn get<'a, R: Resource>(&self) -> Option<&'a R> {
         let id = *self.ids.get(&TypeId::of::<R>())?;
         let raw = &self.sparse_set.get(id.get())?.resource;
-        let val = unsafe { raw.get().as_ref().unwrap_unchecked().downcast_ref_unchecked::<R>() };
+        let val = unsafe { raw.get().as_ref().unwrap_unchecked().downcast_unchecked_ref::<R>() };
         Some(val)
     }
 
     pub fn get_mut<'a, R: Resource>(&mut self) -> Option<&'a mut R> {
         let id = *self.ids.get(&TypeId::of::<R>())?;
         let raw = &self.sparse_set.get(id.get())?.resource;
-        let val = unsafe { raw.get().as_mut().unwrap_unchecked().downcast_mut_unchecked::<R>() };
+        let val = unsafe { raw.get().as_mut().unwrap_unchecked().downcast_unchecked_mut::<R>() };
         Some(val)
     }
 
@@ -110,7 +110,7 @@ impl Resources {
                 };
                 self.sparse_set.insert(id, record);
                 unsafe { self.sparse_set.get_mut(id).expect("Resources::get_or_insert inserted resource not present")
-                    .resource.get_mut().downcast_mut_unchecked::<R>() }
+                    .resource.get_mut().downcast_unchecked_mut::<R>() }
             },
             std::collections::hash_map::Entry::Occupied(entry) => {
                 let id = entry.get().get();
@@ -120,7 +120,7 @@ impl Resources {
                         on_remove: |resource, commands| {
                             resource.downcast::<R>().expect("Resources on_remove invalid cast").on_remove(commands);
                         }
-                    }).resource.get_mut().downcast_mut_unchecked::<R>()
+                    }).resource.get_mut().downcast_unchecked_mut::<R>()
                 }
             }
         }
