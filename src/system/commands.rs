@@ -1,4 +1,4 @@
-use crate::{Component, ComponentBundle, Entity, Event, IntoSystem, ObserverInput, Resource, ResourceId, ScheduleLabel, TriggerInput, SystemInput, World, entity::Entities, param::SystemParam, world::WorldPtr};
+use crate::{Component, ComponentBundle, Entity, Event, IntoSystem, ObserverInput, Resource, ResourceId, ScheduleLabel, SystemInput, TriggerInput, World, entity::Entities, error::ECSError, param::{SystemParam, SystemParamError}, system::SystemOutput, world::WorldPtr};
 
 use super::{SystemHandle, SystemId};
 
@@ -68,6 +68,9 @@ enum CommandMeta {
     RemoveChildren {
         entity: Entity
     },
+    HandleError {
+        error: ECSError,
+    }
 }
 
 impl Commands<'_> {
@@ -154,7 +157,10 @@ impl Commands<'_> {
             f: |world, data, target| {
                 let data = data as *mut E;
                 let event = unsafe { data.read_unaligned() };
-                world.trigger_from_system(event, target);
+                if let Err(err) = world.trigger_from_system(event, target) {
+                    log::warn!("{}", err);
+                    world.send_event(err);
+                }
             },
             target,
             data_size: size_of::<E>(),
@@ -214,7 +220,7 @@ impl Commands<'_> {
         self.copy_data(command_meta, index);
     }
 
-    pub fn add_system<L: ScheduleLabel, ParamIn: SystemInput, S: IntoSystem<ParamIn, ()> + 'static>(&mut self, label: L, system: S) -> SystemId {
+    pub fn add_system<L: ScheduleLabel, ParamIn: SystemInput, Output: SystemOutput, S: IntoSystem<ParamIn, (), Output> + 'static>(&mut self, label: L, system: S) -> SystemId {
         let additional = size_of::<CommandMeta>() + size_of::<L>() + size_of::<S>();
         let index = self.queue.len();
         self.queue.resize(self.queue.len() + additional, 0);
@@ -238,7 +244,7 @@ impl Commands<'_> {
         system_id
     }
 
-    pub fn add_observer<ParamIn: ObserverInput, S: IntoSystem<ParamIn, TriggerInput> + 'static>(&mut self, system: S) -> SystemId {
+    pub fn add_observer<ParamIn: ObserverInput, Output: SystemOutput, S: IntoSystem<ParamIn, TriggerInput, Output> + 'static>(&mut self, system: S) -> SystemId {
         let additional = size_of::<CommandMeta>() + size_of::<S>();
         let index = self.queue.len();
         self.queue.resize(self.queue.len() + additional, 0);
@@ -315,6 +321,16 @@ impl Commands<'_> {
         self.queue.resize(self.queue.len() + additional, 0);
         
         let command_meta = CommandMeta::RemoveChildren { entity };
+
+        self.copy_data(command_meta, index);
+    }
+
+    pub(crate) fn handle_error(&mut self, error: ECSError) {
+        let additional = size_of::<CommandMeta>();
+        let index = self.queue.len();
+        self.queue.resize(self.queue.len() + additional, 0);
+        
+        let command_meta = CommandMeta::HandleError { error };
 
         self.copy_data(command_meta, index);
     }
@@ -396,6 +412,9 @@ impl Commands<'_> {
                 CommandMeta::RemoveChildren { entity } => {
                     world.remove_children(entity);
                 },
+                CommandMeta::HandleError { error } => {
+                    world.handle_error(error);
+                }
             }
         }
         queue.clear();
@@ -411,12 +430,12 @@ impl Commands<'_> {
     }
 }
 
-impl SystemParam for Commands<'_> {
+unsafe impl SystemParam for Commands<'_> {
     type Item<'a> = Commands<'a>;
     type State = Vec<u8>;
 
-    fn init_state(_: &mut World, _: &SystemHandle) -> Self::State {
-        Vec::new()
+    fn init_state(_: &mut World, _: &SystemHandle) -> Result<Self::State, SystemParamError> {
+        Ok(Vec::new())
     }
 
     unsafe fn fetch<'a>(world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: &SystemHandle) -> Self::Item<'a> {

@@ -1,4 +1,4 @@
-use crate::{access::Access, param::SystemParam, trigger::Trigger, system::{System, SystemFunc, SystemHandle, Commands}, world::WorldPtr, Entity, Event, IntoSystem, SystemId, World};
+use crate::{Entity, Event, IntoSystem, SystemId, World, access::Access, param::{SystemParam, SystemParamError}, system::{Commands, System, SystemFunc, SystemHandle, SystemOutput, error::InternalSystemError}, trigger::Trigger, world::WorldPtr};
 use std::{any::TypeId, collections::HashMap, ptr::NonNull};
 
 #[derive(Default)]
@@ -8,7 +8,7 @@ pub struct Observers {
 }
 
 impl Observers {
-    pub(crate) fn add_observer<ParamIn: ObserverInput, S: IntoSystem<ParamIn, TriggerInput> + 'static>(&mut self, system: S) -> SystemId {
+    pub(crate) fn add_observer<ParamIn: ObserverInput, Output: SystemOutput, S: IntoSystem<ParamIn, TriggerInput, Output> + 'static>(&mut self, system: S) -> SystemId {
         let mut system: Box<dyn System<Input = TriggerInput> + Send + Sync> = Box::new(system.into_system());
         let event_type_id = *system.trigger_access().expect("observer does not have trigger access");
         let system_id = system.id().clone();
@@ -25,23 +25,24 @@ impl Observers {
         system_id
     }
 
-    pub(crate) fn trigger<E: Event>(&mut self, mut event: E, target: Option<Entity>, mut world_ptr: WorldPtr<'_>) {
+    pub(crate) fn trigger<E: Event>(&mut self, mut event: E, target: Option<Entity>, mut world_ptr: WorldPtr<'_>) -> Result<(), InternalSystemError> {
         let trigger_input = TriggerInput {
             event: NonNull::from(&mut event).cast::<()>(),
             target,
         };
 
-        let Some(system_indices) = self.event_to_systems.get_mut(&TypeId::of::<E>()) else { return; }; 
+        let Some(system_indices) = self.event_to_systems.get_mut(&TypeId::of::<E>()) else { return Ok(()); }; 
         for mut system_ptr in system_indices.iter().copied() {
             let system = unsafe { system_ptr.as_mut() };
             if !system.id().is_alive() { continue; }
             if !system.is_init() {
-                system.init(unsafe { world_ptr.as_world_mut() });
+                system.init(unsafe { world_ptr.as_world_mut() })?;
             }
             system.execute(world_ptr, trigger_input);
             system.after(unsafe { world_ptr.as_world_mut() }.command_buffer());
         }
         unsafe { world_ptr.as_world_mut() }.process_command_buffer();
+        Ok(())
     }
 
     pub(crate) fn remove_dead_observers(&mut self) {
@@ -88,48 +89,50 @@ variadics_please::all_tuples!{observer_input_impl, 1, 31, In}
 macro_rules! observer_func_impl {
     ($(($i:tt, $param:ident, $p:ident)),+) => {
         #[allow(unused_parens)]
-        impl<'b, E: Event, F, $($param),+> SystemFunc<(Trigger<'b, E>, $($param),+), TriggerInput> for F where
+        impl<'b, E: Event, F, $($param),+, Output> SystemFunc<(Trigger<'b, E>, $($param),+), TriggerInput, Output> for F where
             F: Send + Sync + 'static,
             for<'a> &'a F: 
-                FnMut(Trigger<'a, E>, $($param),+) +
-                FnMut(Trigger<'a, E>, $($param::Item<'a>),+),
+                FnMut(Trigger<'a, E>, $($param),+) -> Output +
+                FnMut(Trigger<'a, E>, $($param::Item<'a>),+) -> Output,
             $($param: for<'a> SystemParam + 'static),+
         {
             type State = ($($param::State),+);
-            fn run<'a>(&self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, input: TriggerInput, system_meta: SystemHandle) {
+            fn run<'a>(&self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, input: TriggerInput, system_meta: SystemHandle) -> Output {
                 #[allow(clippy::too_many_arguments)]
-                fn call<'a, E: Event, $($param),+>(mut f: impl FnMut(Trigger<'a, E>, $($param),+), s: Trigger<'a, E>, $($p:$param),+) {
-                    f(s, $($p),+);
+                fn call<'a, E: Event, $($param),+, Output>(mut f: impl FnMut(Trigger<'a, E>, $($param),+) -> Output, s: Trigger<'a, E>, $($p:$param),+) -> Output {
+                    f(s, $($p),+)
                 }
                 unsafe {
                     $(let $p = $param::fetch(world_ptr, &mut state.$i, &system_meta);)+
                     let trigger = Trigger::fetch(world_ptr, input);
-                    call(self, trigger, $($p),+);
+                    call(self, trigger, $($p),+)
                 }
             }
             
-            fn join_component_access(world: &mut World, component_access: &mut Access) {
-                $($param::join_component_access(world, component_access);)+
+            fn join_component_access(world: &mut World, component_access: &mut Access) -> Result<(), SystemParamError> {
+                $($param::join_component_access(world, component_access)?;)+
+                Ok(())
             }
 
-            fn join_resource_access(world: &mut World, resource_access: &mut Access) {
-                $($param::join_resource_access(world, resource_access);)+
+            fn join_resource_access(world: &mut World, resource_access: &mut Access) -> Result<(), SystemParamError> {
+                $($param::join_resource_access(world, resource_access)?;)+
+                Ok(())
             }
 
             fn name(&self) -> &'static str {
                 std::any::type_name::<F>()
             }
 
-            fn init_state(world: &mut World, system_handle: SystemHandle) -> Self::State {
-                ($($param::init_state(world, &system_handle)),+)
+            fn init_state(world: &mut World, system_handle: SystemHandle) -> Result<Self::State, SystemParamError> {
+                Ok(($($param::init_state(world, &system_handle)?),+))
             }
 
             fn trigger_access() -> Option<TypeId> {
                 Some(TypeId::of::<E>())
             }
 
-            fn after<'state>(mut commands: Commands<'state>, state: &'state mut Self::State) {
-                $($param::after(&mut commands, &mut state.$i);)+
+            fn after<'state>(commands: &mut Commands<'state>, state: &'state mut Self::State) {
+                $($param::after(commands, &mut state.$i);)+
             }
         }
     }
@@ -137,38 +140,38 @@ macro_rules! observer_func_impl {
 
 variadics_please::all_tuples_enumerated!{observer_func_impl, 2, 31, In, p}
 
-impl<E: Event, F, In> SystemFunc<(Trigger<'_, E>, In), TriggerInput> for F where 
+impl<E: Event, F, In, Output> SystemFunc<(Trigger<'_, E>, In), TriggerInput, Output> for F where 
     F: Send + Sync + 'static,
     for<'a> &'a F:
-        FnMut(Trigger<'a, E>, In) +
-        FnMut(Trigger<'a, E>, In::Item<'a>),
+        FnMut(Trigger<'a, E>, In) -> Output +
+        FnMut(Trigger<'a, E>, In::Item<'a>) -> Output,
     In: for<'a> SystemParam + 'static,
 {
     type State = In::State;
-    fn run<'a>(&self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, input: TriggerInput, system_meta: SystemHandle) {
-        fn call<'a, E: Event, In>(mut f: impl FnMut(Trigger<'a, E>, In), s: Trigger<'a, E>, p: In) {
+    fn run<'a>(&self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, input: TriggerInput, system_meta: SystemHandle) -> Output {
+        fn call<'a, E: Event, In, Output>(mut f: impl FnMut(Trigger<'a, E>, In) -> Output, s: Trigger<'a, E>, p: In) -> Output {
             f(s, p)
         }
         unsafe {
             let p = In::fetch(world_ptr, state, &system_meta);
             let trigger = Trigger::fetch(world_ptr, input);
-            call(self, trigger, p);
+            call(self, trigger, p)
         }
     }
 
-    fn join_component_access(world: &mut World, component_access: &mut Access) {
-        In::join_component_access(world, component_access);
+    fn join_component_access(world: &mut World, component_access: &mut Access) -> Result<(), SystemParamError> {
+        In::join_component_access(world, component_access)
     }
 
-    fn join_resource_access(world: &mut World, resource_access: &mut Access) {
-        In::join_resource_access(world, resource_access);
+    fn join_resource_access(world: &mut World, resource_access: &mut Access) -> Result<(), SystemParamError> {
+        In::join_resource_access(world, resource_access)
     }
 
     fn name(&self) -> &'static str {
         std::any::type_name::<F>()
     }
 
-    fn init_state(world: &mut World, system_handle: SystemHandle) -> Self::State {
+    fn init_state(world: &mut World, system_handle: SystemHandle) -> Result<Self::State, SystemParamError> {
         In::init_state(world, &system_handle)
     }
 
@@ -176,37 +179,37 @@ impl<E: Event, F, In> SystemFunc<(Trigger<'_, E>, In), TriggerInput> for F where
         Some(TypeId::of::<E>())
     }
 
-    fn after<'state>(mut commands: Commands<'state>, state: &'state mut Self::State) {
-        In::after(&mut commands, state);
+    fn after<'state>(commands: &mut Commands<'state>, state: &'state mut Self::State) {
+        In::after(commands, state);
     }
 }
 
-impl<E: Event, F> SystemFunc<Trigger<'_, E>, TriggerInput> for F where 
+impl<E: Event, F, Output> SystemFunc<Trigger<'_, E>, TriggerInput, Output> for F where 
     F: Send + Sync + 'static,
-    for<'a> &'a F: FnMut(Trigger<'a, E>)
+    for<'a> &'a F: FnMut(Trigger<'a, E>) -> Output
 {
     type State = ();
-    fn run<'a>(&self, world_ptr: WorldPtr<'a>, _: &'a mut Self::State, input: TriggerInput, _: SystemHandle) {
-        fn call<'a, E: Event>(mut f: impl FnMut(Trigger<'a, E>), s: Trigger<'a, E>) {
+    fn run<'a>(&self, world_ptr: WorldPtr<'a>, _: &'a mut Self::State, input: TriggerInput, _: SystemHandle) -> Output {
+        fn call<'a, E: Event, Output>(mut f: impl FnMut(Trigger<'a, E>) -> Output, s: Trigger<'a, E>) -> Output {
             f(s)
         }
         let trigger = unsafe { Trigger::fetch(world_ptr, input) };
-        call(self, trigger);
+        call(self, trigger)
     }
 
-    fn join_component_access(_: &mut World, _: &mut Access) {}
+    fn join_component_access(_: &mut World, _: &mut Access) -> Result<(), SystemParamError> { Ok(()) }
 
-    fn join_resource_access(_: &mut World, _: &mut Access) {}
+    fn join_resource_access(_: &mut World, _: &mut Access) -> Result<(), SystemParamError> { Ok(()) }
 
     fn name(&self) -> &'static str {
         std::any::type_name::<F>()
     }
 
-    fn init_state(_: &mut World, _: SystemHandle) -> Self::State {}
+    fn init_state(_: &mut World, _: SystemHandle) -> Result<Self::State, SystemParamError> { Ok(()) }
 
     fn trigger_access() -> Option<TypeId> {
         Some(TypeId::of::<E>())
     }
 
-    fn after(_: Commands, _: &mut Self::State) {}
+    fn after(_: &mut Commands, _: &mut Self::State) {}
 }

@@ -1,31 +1,5 @@
 pub mod blob_sparse_set;
-use std::{any::Any, cell::SyncUnsafeCell, slice::Iter};
-
-pub struct TypelessSparseSet {
-    sparse_set: Box<dyn Any>,
-    remove_ptr: fn(&mut Box<dyn Any>, usize),
-}
-
-impl TypelessSparseSet {
-    pub fn new<T: 'static>(sparse_set: SparseSet<T>) -> Self {
-        Self {
-            sparse_set: Box::new(SyncUnsafeCell::new(sparse_set)),
-            remove_ptr: |sparse_set, id| {
-                unsafe { sparse_set.downcast_unchecked_mut::<SyncUnsafeCell<SparseSet<T>>>().get_mut() }.remove(id);
-            },
-        }
-    }
-
-    #[inline]
-    pub unsafe fn downcast_unchecked<T: 'static>(&self) -> &SyncUnsafeCell<SparseSet<T>> {
-        unsafe { self.sparse_set.downcast_unchecked_ref::<SyncUnsafeCell<SparseSet<T>>>() }
-    }
-
-    #[inline]
-    pub fn remove(&mut self, id: usize) {
-        (self.remove_ptr)(&mut self.sparse_set, id);
-    }
-}
+use std::slice::Iter;
 
 pub const SPARSE_SET_CAPACITY: usize = SparseIndex::MAX;
 

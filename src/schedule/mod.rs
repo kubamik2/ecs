@@ -1,8 +1,9 @@
-use std::{any::{Any, TypeId}, collections::HashMap, hash::Hash, ptr::NonNull};
+pub mod error;
+use std::{any::{Any, TypeId}, collections::HashMap, fmt::Debug, hash::Hash, ptr::NonNull, sync::Arc};
 
-use crate::{access::Access, system::{IntoSystem, System, SystemId, SystemInput}, world::{World, WorldId, WorldPtr}};
+use crate::{access::Access, schedule::error::ScheduleRunError, system::{IntoSystem, System, SystemId, SystemInput, SystemOutput, error::InternalSystemError}, world::{World, WorldId, WorldPtr}};
 
-const PARALLEL_EXECUTION_THRESHOLD: usize = 4;
+pub(crate) const PARALLEL_EXECUTION_THRESHOLD: usize = 4;
 
 #[derive(Default)]
 pub struct Schedule {
@@ -10,6 +11,7 @@ pub struct Schedule {
     system_records: Vec<SystemRecord>,
     parallel_execution_queue: Vec<ParallelBucket>,
     init_queue: Vec<Box<dyn System<Input = ()> + Send + Sync>>,
+    label_debug: Option<Arc<str>>, // TODO temp, replace with label
 }
 
 struct SystemRecord {
@@ -18,7 +20,14 @@ struct SystemRecord {
 }
 
 impl Schedule {
-    pub fn add_system<ParamInput: SystemInput, S: IntoSystem<ParamInput, ()> + 'static>(&mut self, system: S) -> SystemId {
+    pub fn with_label<L: ScheduleLabel>(label: &L) -> Self {
+        Self {
+            label_debug: Some(format!("{:?}", label).into_boxed_str().into()),
+            ..Default::default()
+        }
+    }
+
+    pub fn add_system<ParamInput: SystemInput, Output: SystemOutput, S: IntoSystem<ParamInput, (), Output> + 'static>(&mut self, system: S) -> SystemId {
         let system: S::System = system.into_system();
         let id = system.id().clone();
 
@@ -30,8 +39,8 @@ impl Schedule {
         self.init_queue.push(system);
     }
 
-    pub fn init_system(&mut self, world: &mut World, mut system: Box<dyn System<Input = ()> + Send + Sync>) {
-        system.init(world);
+    pub fn init_system(&mut self, world: &mut World, mut system: Box<dyn System<Input = ()> + Send + Sync>) -> Result<(), InternalSystemError> {
+        system.init(world)?;
 
         // add system to parallel_exeuction_queue
         let maybe_bucket = self.parallel_execution_queue
@@ -58,6 +67,7 @@ impl Schedule {
             bucket_index,
             system,
         });
+        Ok(())
     }
 
     pub(crate) fn execute(&mut self, mut world_ptr: WorldPtr<'_>) {
@@ -99,11 +109,15 @@ impl Schedule {
     }
 
     pub fn run(&mut self, world: &mut World) {
-        let world_id = self.linked_world.unwrap_or(world.id());
-        assert!(world.id() == world_id, "initialized schedule ran in a different world");
+        let world_id = *self.linked_world.get_or_insert(world.id());
+        if world.id() != world_id {
+            world.handle_error(ScheduleRunError::different_world(self.label_debug.clone()).into());
+        }
     
         while let Some(system) = self.init_queue.pop() {
-            self.init_system(world, system);
+            if let Err(err) = self.init_system(world, system) {
+                world.handle_error(ScheduleRunError::internal_system(self.label_debug.clone(), err).into());
+            }
         }
 
         self.execute(world.world_ptr_mut());
@@ -167,14 +181,15 @@ impl ParallelBucket {
         self.joined_component_access.join(unsafe { system.as_ref().component_access() });
         self.joined_resource_access.join(unsafe { system.as_ref().resource_access() });
         self.systems.push(system);
-        self.should_run_paralell |= self.systems.len() >= PARALLEL_EXECUTION_THRESHOLD;
+        self.should_run_paralell = self.systems.len() >= PARALLEL_EXECUTION_THRESHOLD;
     }
 }
 
-pub trait ScheduleLabel: 'static + PartialEq + Eq + Hash {}
+pub trait ScheduleLabel: 'static + PartialEq + Eq + Hash + Debug {}
+
 
 #[derive(Default)]
-pub struct Schedules(HashMap<TypeId, Box<dyn Any>>);
+pub(crate) struct Schedules(HashMap<TypeId, Box<dyn Any>>);
 
 impl Schedules {
     pub fn get_mut<L: ScheduleLabel>(&mut self, label: &L) -> Option<&mut Schedule> {

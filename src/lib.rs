@@ -2,12 +2,12 @@
 mod bitmap;
 mod component;
 mod entity;
-mod system;
+pub mod system;
 mod query;
-mod param;
+pub mod param;
 mod access;
 mod resource;
-mod schedule;
+pub mod schedule;
 mod trigger;
 mod event;
 mod observer;
@@ -15,6 +15,7 @@ mod world;
 #[cfg(test)]
 mod tests;
 mod storage;
+pub mod error;
 
 pub use component::{ComponentId, Signature, ComponentBundle, Component};
 pub use world::{World, WorldResMut};
@@ -22,7 +23,7 @@ pub use query::{Query, QueryData, Without, With, QueryFilter, Children};
 pub use resource::{Res, ResMut, ResourceId, Changed, Resource};
 pub use derive::{Component, Resource, ScheduleLabel};
 pub use schedule::{Schedule, ScheduleLabel};
-pub use system::{Commands, SystemHandle, SystemInput, IntoSystem, SystemId, Local, System};
+pub use system::{Commands, SystemHandle, SystemInput, SystemOutput, IntoSystem, SystemId, Local, System};
 pub use trigger::Trigger;
 pub use event::{Event, EventReader, EventReadWriter, EventQueue, EventReaderState};
 pub use entity::Entity;

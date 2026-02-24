@@ -1,4 +1,4 @@
-use crate::{ComponentBundle, ComponentId, Signature, param::SystemParam, system::SystemHandle, world::WorldPtr};
+use crate::{ComponentBundle, ComponentId, Signature, param::{SystemParam, SystemParamError}, system::SystemHandle, world::WorldPtr};
 use super::{access::Access, Component, Entity, World};
 use std::{any::TypeId, collections::HashSet, marker::PhantomData, mem::MaybeUninit, ops::Deref};
 
@@ -126,17 +126,18 @@ impl<'a, D: QueryData, F: QueryFilter> Query<'a, D, F> {
     }
 }
 
-impl<D: QueryData, F: QueryFilter> SystemParam for Query<'_, D, F> {
+unsafe impl<D: QueryData, F: QueryFilter> SystemParam for Query<'_, D, F> {
     type Item<'a> = Query<'a, D, F>;
     type State = (Signature, [ComponentId; QUERY_MAX_VARIADIC_COUNT], Signature);
 
-    fn join_component_access(world: &mut World, component_access: &mut Access) {
+    fn join_component_access(world: &mut World, component_access: &mut Access) -> Result<(), SystemParamError> {
         D::join_component_access(world, component_access);
+        Ok(())
     }
 
-    fn init_state(world: &mut World, _: &SystemHandle) -> Self::State {
+    fn init_state(world: &mut World, _: &SystemHandle) -> Result<Self::State, SystemParamError> {
         let query = Query::<D, F>::new(world);
-        (query.required_component_signature, query.cached_component_ids, query.forbidden_component_signature)
+        Ok((query.required_component_signature, query.cached_component_ids, query.forbidden_component_signature))
     }
 
     unsafe fn fetch<'a>(world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: &SystemHandle) -> Self::Item<'a> {
@@ -196,7 +197,7 @@ impl<C: Component> QueryItem for &C {
 
     #[inline]
     fn join_component_access(world: &mut World, component_access: &mut Access) {
-        component_access.immutable.set(world.register_component::<C>().get());
+        component_access.add_immutable(world.register_component::<C>().get());
     }
 }
 
@@ -234,8 +235,7 @@ impl<C: Component> QueryItem for &mut C {
 
     #[inline]
     fn join_component_access(world: &mut World, component_access: &mut Access) {
-        component_access.mutable.set(world.register_component::<C>().get());
-        component_access.mutable_count += 1;
+        component_access.add_mutable(world.register_component::<C>().get());
     }
 }
 
@@ -291,7 +291,7 @@ impl<C: Component> QueryItem for Option<&C> {
 
     #[inline]
     fn join_component_access(world: &mut World, component_access: &mut Access) {
-        component_access.immutable.set(world.register_component::<C>().get())
+        component_access.add_immutable(world.register_component::<C>().get());
     }
 }
 
@@ -324,8 +324,7 @@ impl<C: Component> QueryItem for Option<&mut C> {
 
     #[inline]
     fn join_component_access(world: &mut World, component_access: &mut Access) {
-        component_access.mutable.set(world.register_component::<C>().get());
-        component_access.mutable_count += 1;
+        component_access.add_mutable(world.register_component::<C>().get());
     }
 }
 

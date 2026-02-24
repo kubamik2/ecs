@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use crate::{param::SystemParam, system::SystemHandle, world::WorldPtr, Resource, World};
+use crate::{Resource, World, param::{SystemParam, SystemParamError, get_resource_id}, system::SystemHandle, world::WorldPtr};
 
 pub trait Event = Send + Sync + 'static;
 
@@ -62,11 +62,11 @@ impl<E: Event> EventReader<'_, E> {
     }
 }
 
-impl<E: Event> SystemParam for EventReader<'_, E> {
+unsafe impl<E: Event> SystemParam for EventReader<'_, E> {
     type Item<'a> = EventReader<'a, E>;
     type State = usize;
-    fn init_state(_: &mut crate::World, _: &SystemHandle) -> Self::State {
-        0
+    fn init_state(_: &mut crate::World, _: &SystemHandle) -> Result<Self::State, SystemParamError> {
+        Ok(0)
     }
 
     unsafe fn fetch<'a>(world_ptr: WorldPtr<'a>, state: &'a mut usize, _: &SystemHandle) -> Self::Item<'a> {
@@ -77,8 +77,9 @@ impl<E: Event> SystemParam for EventReader<'_, E> {
         }
     }
 
-    fn join_resource_access(world: &mut World, resource_access: &mut crate::access::Access) {
-        resource_access.immutable.set(world.resource_id::<EventQueue<E>>().get()) ;
+    fn join_resource_access(world: &mut World, resource_access: &mut crate::access::Access) -> Result<(), SystemParamError> {
+        resource_access.add_immutable(get_resource_id::<EventQueue<E>>(world)?.get());
+        Ok(())
     }
 }
 
@@ -101,11 +102,11 @@ impl<E: Event> EventReadWriter<'_, E> {
     }
 }
 
-impl<E: Event> SystemParam for EventReadWriter<'_, E> {
+unsafe impl<E: Event> SystemParam for EventReadWriter<'_, E> {
     type Item<'a> = EventReadWriter<'a, E>;
     type State = usize;
-    fn init_state(_: &mut crate::World, _: &SystemHandle) -> Self::State {
-        0
+    fn init_state(_: &mut crate::World, _: &SystemHandle) -> Result<Self::State, SystemParamError> {
+        Ok(0)
     }
 
     unsafe fn fetch<'a>(mut world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: &SystemHandle) -> Self::Item<'a> {
@@ -116,9 +117,9 @@ impl<E: Event> SystemParam for EventReadWriter<'_, E> {
         }
     }
 
-    fn join_resource_access(world: &mut World, resource_access: &mut crate::access::Access) {
-        resource_access.mutable.set(world.resource_id::<EventQueue<E>>().get());
-        resource_access.mutable_count += 1;
+    fn join_resource_access(world: &mut World, resource_access: &mut crate::access::Access) -> Result<(), SystemParamError> {
+        resource_access.add_mutable(get_resource_id::<EventQueue<E>>(world)?.get());
+        Ok(())
     }
 }
 
@@ -165,10 +166,10 @@ impl<E: Event> EventReaderState<E> {
         }
     }
 
-    pub fn reader<'a>(&'a mut self, world: &'a World) -> EventReader<'a, E> {
-        EventReader {
+    pub fn reader<'a>(&'a mut self, world: &'a World) -> Result<EventReader<'a, E>, SystemParamError> {
+        Ok(EventReader {
             last_count: &mut self.last_count,
-            event_queue: world.resource(),
-        }
+            event_queue: world.get_resource().ok_or(SystemParamError::MissingResource(std::any::type_name::<EventQueue<E>>()))?,
+        })
     }
 }

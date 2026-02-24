@@ -1,6 +1,6 @@
 use std::{any::{Any, TypeId}, cell::SyncUnsafeCell, collections::HashMap, marker::PhantomData, ops::{Deref, DerefMut}};
 
-use crate::{Commands, storage::{sparse_set::SparseSet}, system::SystemHandle, world::WorldPtr};
+use crate::{Commands, param::{SystemParamError, get_resource_id}, storage::sparse_set::SparseSet, system::SystemHandle, world::WorldPtr};
 
 use super::{access::Access, param::SystemParam, World};
 
@@ -8,6 +8,7 @@ use super::{access::Access, param::SystemParam, World};
 pub trait Resource: Send + Sync + 'static {
     fn on_add(&mut self, commands: &mut Commands) {}
     fn on_remove(&mut self, commands: &mut Commands) {}
+    fn join_additional_resource_access<F: FnMut(ResourceId)>(world: &mut World, mut f: F) -> Result<(), SystemParamError> { Ok(()) }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -176,17 +177,20 @@ impl<R: Resource + Send + Sync> DerefMut for ResMut<'_, R> {
     }
 }
 
-impl<R: Resource + Send + Sync + 'static> SystemParam for Res<'_, R> {
+unsafe impl<R: Resource + Send + Sync + 'static> SystemParam for Res<'_, R> {
     type Item<'b> = Res<'b, R>;
     type State = ResourceId;
 
-    fn join_resource_access(world: &mut World, resource_access: &mut Access) {
-        resource_access.immutable.set(world.resource_id::<R>().get());
+    fn join_resource_access(world: &mut World, resource_access: &mut Access) -> Result<(), SystemParamError> {
+        resource_access.add_immutable(get_resource_id::<R>(world)?.get());
+        R::join_additional_resource_access(world, |resource_id| {
+            resource_access.add_immutable(resource_id.get());
+        })?;
+        Ok(())
     }
 
-    fn init_state(world: &mut World, system_handle: &SystemHandle) -> Self::State {
-        world.get_resource_id::<R>()
-            .unwrap_or_else(|| panic!("system '{}' attempted initialization with uninitialized resource '{}'", system_handle.name(), std::any::type_name::<R>()))
+    fn init_state(world: &mut World, _: &SystemHandle) -> Result<Self::State, SystemParamError> {
+        get_resource_id::<R>(world)
     }
 
     unsafe fn fetch<'a>(world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: &SystemHandle) -> Self::Item<'a> {
@@ -195,20 +199,21 @@ impl<R: Resource + Send + Sync + 'static> SystemParam for Res<'_, R> {
     }
 }
 
-impl<R: Resource + Send + Sync + 'static> SystemParam for ResMut<'_, R> {
+unsafe impl<R: Resource + Send + Sync + 'static> SystemParam for ResMut<'_, R> {
     type Item<'b> = ResMut<'b, R>;
     type State = (ResourceId, bool);
     //                          ^ was_modified
 
-    fn join_resource_access(world: &mut World, resource_access: &mut Access) {
-        resource_access.mutable.set(world.resource_id::<R>().get());
-        resource_access.mutable_count += 1;
+    fn join_resource_access(world: &mut World, resource_access: &mut Access) -> Result<(), SystemParamError> {
+        resource_access.add_mutable(get_resource_id::<R>(world)?.get());
+        R::join_additional_resource_access(world, |resource_id| {
+            resource_access.add_mutable(resource_id.get());
+        })?;
+        Ok(())
     }
 
-    fn init_state(world: &mut World, system_handle: &SystemHandle) -> Self::State {
-        let id = world.get_resource_id::<R>()
-            .unwrap_or_else(|| panic!("system '{}' attempted initialization with uninitialized resource '{}'", system_handle.name(), std::any::type_name::<R>()));
-        (id, false)
+    fn init_state(world: &mut World, _: &SystemHandle) -> Result<Self::State, SystemParamError> {
+        get_resource_id::<R>(world).map(|id| (id, false))
     }
 
     unsafe fn fetch<'a>(mut world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: &SystemHandle) -> Self::Item<'a> {
@@ -225,16 +230,20 @@ impl<R: Resource + Send + Sync + 'static> SystemParam for ResMut<'_, R> {
     }
 }
 
-impl<R: Resource + Send + Sync + 'static> SystemParam for Option<Res<'_, R>> {
+unsafe impl<R: Resource + Send + Sync + 'static> SystemParam for Option<Res<'_, R>> {
     type Item<'b> = Option<Res<'b, R>>;
     type State = ResourceId;
 
-    fn join_resource_access(world: &mut World, resource_access: &mut Access) {
-        resource_access.immutable.set(world.resource_id::<R>().get());
+    fn join_resource_access(world: &mut World, resource_access: &mut Access) -> Result<(), SystemParamError> {
+        resource_access.add_immutable(get_resource_id::<R>(world)?.get());
+        R::join_additional_resource_access(world, |resource_id| {
+            resource_access.add_immutable(resource_id.get());
+        })?;
+        Ok(())
     }
 
-    fn init_state(world: &mut World, _: &SystemHandle) -> Self::State {
-        world.register_resource::<R>()
+    fn init_state(world: &mut World, _: &SystemHandle) -> Result<Self::State, SystemParamError> {
+        Ok(world.register_resource::<R>())
     }
 
     unsafe fn fetch<'a>(world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: &SystemHandle) -> Self::Item<'a> {
@@ -243,18 +252,21 @@ impl<R: Resource + Send + Sync + 'static> SystemParam for Option<Res<'_, R>> {
     }
 }
 
-impl<R: Resource + Send + Sync + 'static> SystemParam for Option<ResMut<'_, R>> {
+unsafe impl<R: Resource + Send + Sync + 'static> SystemParam for Option<ResMut<'_, R>> {
     type Item<'b> = Option<ResMut<'b, R>>;
     type State = (ResourceId, bool);
     //                          ^ was_modified
 
-    fn join_resource_access(world: &mut World, resource_access: &mut Access) {
-        resource_access.mutable.set(world.resource_id::<R>().get());
-        resource_access.mutable_count += 1;
+    fn join_resource_access(world: &mut World, resource_access: &mut Access) -> Result<(), SystemParamError> {
+        resource_access.add_mutable(get_resource_id::<R>(world)?.get());
+        R::join_additional_resource_access(world, |resource_id| {
+            resource_access.add_mutable(resource_id.get());
+        })?;
+        Ok(())
     }
 
-    fn init_state(world: &mut World, _: &SystemHandle) -> Self::State {
-        (world.register_resource::<R>(), false)
+    fn init_state(world: &mut World, _: &SystemHandle) -> Result<Self::State, SystemParamError> {
+        Ok((world.register_resource::<R>(), false))
     }
 
     unsafe fn fetch<'a>(mut world_ptr: WorldPtr<'a>, state: &'a mut Self::State, _: &SystemHandle) -> Self::Item<'a> {

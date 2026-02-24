@@ -26,7 +26,6 @@ impl BlobVec<Global> {
         }
     }
 }
-
 impl<A: Allocator> BlobVec<A> {
     #[inline]
     pub const fn new_in<T>(alloc: A) -> Self {

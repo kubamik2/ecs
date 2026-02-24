@@ -1,6 +1,6 @@
 use std::{any::TypeId, marker::PhantomData, ops::{Deref, DerefMut}, ptr::{self, NonNull}};
 
-use crate::{observer::{ObserverInput, Observers, TriggerInput}, query::QueryData, resource::{Changed, ResourceId}, schedule::Schedules, system::{IntoSystem, System, SystemId}, *};
+use crate::{error::{ECSError, ErrorHandlerInput}, observer::{ObserverInput, Observers, TriggerInput}, query::QueryData, resource::{Changed, ResourceId}, schedule::Schedules, system::{IntoSystem, System, SystemId, error::InternalSystemError}, *};
 
 static WORLD_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -16,11 +16,12 @@ pub struct World {
     schedules: Schedules,
     pub(crate) thread_pool: rayon::ThreadPool,
     command_buffer: Vec<u8>,
+    error_handler: Box<dyn System<Input = ECSError>>,
 }
 
 impl Default for World {
     fn default() -> Self {
-        Self::new(Self::DEFAULT_THREAD_COUND).unwrap()
+        Self::new(Self::DEFAULT_THREAD_COUNT).unwrap()
     }
 }
 
@@ -28,17 +29,22 @@ unsafe impl Sync for World {}
 unsafe impl Send for World {}
 
 impl World {
-    const DEFAULT_THREAD_COUND: usize = 16;
+    const DEFAULT_THREAD_COUNT: usize = 16;
     pub fn new(num_threads: usize) -> Result<Self, rayon::ThreadPoolBuildError> {
-        Ok(Self {
+        let mut world = Self {
             id: WorldId(WORLD_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
-            components: Default::default(), entities: Default::default(),
+            components: Default::default(),
+            entities: Default::default(),
             resources: Default::default(),
             observers: Default::default(),
             schedules: Schedules::default(),
             thread_pool: rayon::ThreadPoolBuilder::new().num_threads(num_threads).build()?,
             command_buffer: Vec::new(),
-        })
+            error_handler: Box::new(crate::error::handlers::panic_error_handler.into_system()),
+        };
+        let mut world_ptr = world.world_ptr_mut();
+        unsafe { world_ptr.as_world_mut() }.error_handler.init(&mut world).unwrap();
+        Ok(world)
     }
 
     #[inline]
@@ -401,15 +407,15 @@ impl World {
     // ===== Triggers =====
     
 
-    pub(crate) fn trigger_from_system<E: Event>(&mut self, event: E, target: Option<Entity>) {
+    pub(crate) fn trigger_from_system<E: Event>(&mut self, event: E, target: Option<Entity>) -> Result<(), InternalSystemError> {
         let mut world_ptr = self.world_ptr_mut();
-        unsafe { world_ptr.as_world_mut() }.observers.trigger(event, target, world_ptr);
+        unsafe { world_ptr.as_world_mut() }.observers.trigger(event, target, world_ptr)
     }
 
-    pub fn trigger<E: Event>(&mut self, event: E, target: Option<Entity>) {
+    pub fn trigger<E: Event>(&mut self, event: E, target: Option<Entity>) -> Result<(), InternalSystemError> {
         self.remove_dead_observers();
         let mut world_ptr = self.world_ptr_mut();
-        unsafe { world_ptr.as_world_mut() }.observers.trigger(event, target, world_ptr);
+        unsafe { world_ptr.as_world_mut() }.observers.trigger(event, target, world_ptr)
     }
 
 
@@ -417,12 +423,12 @@ impl World {
 
 
     #[inline]
-    pub fn add_observer<ParamIn: ObserverInput, S: IntoSystem<ParamIn, TriggerInput> + 'static>(&mut self, system: S) -> SystemId {
+    pub fn add_observer<ParamIn: ObserverInput, Output: SystemOutput, S: IntoSystem<ParamIn, TriggerInput, Output> + 'static>(&mut self, system: S) -> SystemId {
         self.observers.add_observer(system)
     }
 
     #[inline]
-    pub fn add_observer_with_id<ParamIn: ObserverInput, S: IntoSystem<ParamIn, TriggerInput> + 'static>(&mut self, system: S, id: SystemId) {
+    pub fn add_observer_with_id<ParamIn: ObserverInput, Output: SystemOutput, S: IntoSystem<ParamIn, TriggerInput, Output> + 'static>(&mut self, system: S, id: SystemId) {
         let boxed_system = Box::new(system.into_system_with_id(id));
         self.observers.add_boxed_observer(boxed_system);
     }
@@ -437,7 +443,7 @@ impl World {
 
 
     #[inline]
-    pub fn add_system<L: ScheduleLabel, ParamIn: SystemInput, S: IntoSystem<ParamIn, ()> + 'static>(&mut self, label: L, system: S) -> SystemId {
+    pub fn add_system<L: ScheduleLabel, ParamIn: SystemInput, Output: SystemOutput, S: IntoSystem<ParamIn, (), Output> + 'static>(&mut self, label: L, system: S) -> SystemId {
         let schedule = self.schedules.get_or_default(label);
         let boxed_system = Box::new(system.into_system());
         let id = boxed_system.id().clone();
@@ -446,7 +452,7 @@ impl World {
     }
 
     #[inline]
-    pub(crate) fn add_system_with_id<L: ScheduleLabel, ParamIn: SystemInput, S: IntoSystem<ParamIn, ()> + 'static>(&mut self, label: L, system: S, id: SystemId) {
+    pub(crate) fn add_system_with_id<L: ScheduleLabel, ParamIn: SystemInput, Output: SystemOutput, S: IntoSystem<ParamIn, (), Output> + 'static>(&mut self, label: L, system: S, id: SystemId) {
         let schedule = self.schedules.get_or_default(label);
         let boxed_system = Box::new(system.into_system_with_id(id));
         schedule.add_boxed_system(boxed_system);
@@ -465,6 +471,22 @@ impl World {
     #[inline]
     pub fn register_event<E: Event>(&mut self) {
         self.get_resource_or_insert_with(|| EventQueue::<E>::new());
+    }
+
+
+    // ===== Error handling =====
+
+    #[inline]
+    pub fn set_error_handler<ParamIn: ErrorHandlerInput, Output: SystemOutput, S: IntoSystem<ParamIn, ECSError, Output> + 'static>(&mut self, error_handler: S) {
+        let mut boxed_system = Box::new(error_handler.into_system());
+        boxed_system.init(self).unwrap();
+        self.error_handler = boxed_system;
+    }
+
+    #[inline]
+    pub(crate) fn handle_error(&mut self, error: ECSError) {
+        let mut world_ptr = self.world_ptr_mut();
+        unsafe { world_ptr.as_world_mut() }.error_handler.execute(world_ptr, error);
     }
 
     
@@ -533,7 +555,10 @@ impl<R: Resource> Drop for WorldResMut<'_, R> {
         let world = unsafe { self.world_ptr.as_world_mut() };
         if self.was_modified {
             world.send_event(Changed::<R>::new());
-            world.trigger(Changed::<R>::new(), None);
+            if let Err(err) = world.trigger(Changed::<R>::new(), None) {
+                log::warn!("{}", err);
+                world.send_event(err);
+            }
         }
     }
 }

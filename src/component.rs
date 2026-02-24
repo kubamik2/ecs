@@ -33,7 +33,7 @@ pub struct ComponentRecord {
 }
 
 #[derive(Default)]
-pub struct Components {
+pub(crate) struct Components {
     component_records: HashMap<TypeId, ComponentRecord>,
     components: Vec<BlobSparseSet>,
     component_on_remove: Vec<for<'a> fn(PtrMut<'a>, &'a mut Commands)>,

@@ -1,2 +1,4 @@
 more complex hierarchal relationships?
 benchmark reuse entities fifo vs lifo
+entity hierarchy check for a cycle
+PARALLEL_EXECUTION_THRESHOLD is a crude solution and can be very inefficient, replace with an algorithm that separates systems into time usage bins

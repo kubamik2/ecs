@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.102"
 derive = { path = "derive" }
+log = "0.4.29"
 rayon = "1.10.0"
 variadics_please = "1.1.0"
