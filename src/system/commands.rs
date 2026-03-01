@@ -1,4 +1,4 @@
-use crate::{Component, ComponentBundle, Entity, Event, IntoSystem, ObserverInput, Resource, ResourceId, ScheduleLabel, SystemInput, TriggerInput, World, entity::Entities, error::ECSError, param::{SystemParam, SystemParamError}, system::SystemOutput, world::WorldPtr};
+use crate::{Component, ComponentBundle, Entity, IntoSystem, ObserverInput, Resource, ResourceId, ScheduleLabel, SystemInput, TriggerInput, World, entity::Entities, error::ECSError, param::{SystemParam, SystemParamError}, system::SystemOutput, world::WorldPtr};
 
 use super::{SystemHandle, SystemId};
 
@@ -148,7 +148,7 @@ impl Commands<'_> {
         self.copy_data(command_meta, index);
     }
 
-    pub fn trigger<E: Event>(&mut self, event: E, target: Option<Entity>) {
+    pub fn trigger<E: Send + Sync + 'static>(&mut self, event: E, target: Option<Entity>) {
         let additional = size_of::<CommandMeta>() + size_of::<E>();
         let index = self.queue.len();
         self.queue.resize(self.queue.len() + additional, 0);
@@ -265,7 +265,7 @@ impl Commands<'_> {
         system_id
     }
 
-    pub fn send_event<E: Event>(&mut self, event: E) {
+    pub fn send_event<E: Send + Sync + 'static>(&mut self, event: E) {
         let additional = size_of::<CommandMeta>() + size_of::<E>();
         let index = self.queue.len();
         self.queue.resize(self.queue.len() + additional, 0);

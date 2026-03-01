@@ -407,12 +407,12 @@ impl World {
     // ===== Triggers =====
     
 
-    pub(crate) fn trigger_from_system<E: Event>(&mut self, event: E, target: Option<Entity>) -> Result<(), InternalSystemError> {
+    pub(crate) fn trigger_from_system<E: Send + Sync + 'static>(&mut self, event: E, target: Option<Entity>) -> Result<(), InternalSystemError> {
         let mut world_ptr = self.world_ptr_mut();
         unsafe { world_ptr.as_world_mut() }.observers.trigger(event, target, world_ptr)
     }
 
-    pub fn trigger<E: Event>(&mut self, event: E, target: Option<Entity>) -> Result<(), InternalSystemError> {
+    pub fn trigger<E: Send + Sync + 'static>(&mut self, event: E, target: Option<Entity>) -> Result<(), InternalSystemError> {
         self.remove_dead_observers();
         let mut world_ptr = self.world_ptr_mut();
         unsafe { world_ptr.as_world_mut() }.observers.trigger(event, target, world_ptr)
@@ -463,13 +463,13 @@ impl World {
 
 
     #[inline]
-    pub fn send_event<E: Event>(&mut self, event: E) {
+    pub fn send_event<E: Send + Sync + 'static>(&mut self, event: E) {
         let event_queue = self.get_resource_ref_or_insert_with(|| EventQueue::<E>::new());
         event_queue.send(event);
     }
 
     #[inline]
-    pub fn register_event<E: Event>(&mut self) {
+    pub fn register_event<E: Send + Sync + 'static>(&mut self) {
         self.get_resource_or_insert_with(|| EventQueue::<E>::new());
     }
 

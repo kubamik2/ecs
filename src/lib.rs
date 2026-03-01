@@ -25,6 +25,6 @@ pub use derive::{Component, Resource, ScheduleLabel};
 pub use schedule::{Schedule, ScheduleLabel};
 pub use system::{Commands, SystemHandle, SystemInput, SystemOutput, IntoSystem, SystemId, Local, System};
 pub use trigger::Trigger;
-pub use event::{Event, EventReader, EventReadWriter, EventQueue, EventReaderState};
+pub use event::{EventReader, EventReadWriter, EventQueue, EventReaderState, EventIterator};
 pub use entity::Entity;
 pub use observer::{ObserverInput, TriggerInput};

@@ -1,4 +1,4 @@
-use crate::{Entity, Event, IntoSystem, SystemId, World, access::Access, param::{SystemParam, SystemParamError}, system::{Commands, System, SystemFunc, SystemHandle, SystemOutput, error::InternalSystemError}, trigger::Trigger, world::WorldPtr};
+use crate::{Entity, IntoSystem, SystemId, World, access::Access, param::{SystemParam, SystemParamError}, system::{Commands, System, SystemFunc, SystemHandle, SystemOutput, error::InternalSystemError}, trigger::Trigger, world::WorldPtr};
 use std::{any::TypeId, collections::HashMap, ptr::NonNull};
 
 #[derive(Default)]
@@ -25,7 +25,7 @@ impl Observers {
         system_id
     }
 
-    pub(crate) fn trigger<E: Event>(&mut self, mut event: E, target: Option<Entity>, mut world_ptr: WorldPtr<'_>) -> Result<(), InternalSystemError> {
+    pub(crate) fn trigger<E: Send + Sync + 'static>(&mut self, mut event: E, target: Option<Entity>, mut world_ptr: WorldPtr<'_>) -> Result<(), InternalSystemError> {
         let trigger_input = TriggerInput {
             event: NonNull::from(&mut event).cast::<()>(),
             target,
@@ -75,12 +75,12 @@ pub struct TriggerInput {
 
 pub trait ObserverInput {}
 
-impl<E: Event> ObserverInput for Trigger<'_, E> {}
+impl<E: Send + Sync + 'static> ObserverInput for Trigger<'_, E> {}
 
 macro_rules! observer_input_impl {
     ($($param:ident),+) => {
         #[allow(unused_parens)]
-        impl<'a, E: Event, $($param: SystemParam),+> ObserverInput for (Trigger<'a, E>, $($param),+) {}
+        impl<'a, E: Send + Sync + 'static, $($param: SystemParam),+> ObserverInput for (Trigger<'a, E>, $($param),+) {}
     }
 }
 
@@ -89,7 +89,7 @@ variadics_please::all_tuples!{observer_input_impl, 1, 31, In}
 macro_rules! observer_func_impl {
     ($(($i:tt, $param:ident, $p:ident)),+) => {
         #[allow(unused_parens)]
-        impl<'b, E: Event, F, $($param),+, Output> SystemFunc<(Trigger<'b, E>, $($param),+), TriggerInput, Output> for F where
+        impl<'b, E: Send + Sync + 'static, F, $($param),+, Output> SystemFunc<(Trigger<'b, E>, $($param),+), TriggerInput, Output> for F where
             F: Send + Sync + 'static,
             for<'a> &'a F: 
                 FnMut(Trigger<'a, E>, $($param),+) -> Output +
@@ -99,7 +99,7 @@ macro_rules! observer_func_impl {
             type State = ($($param::State),+);
             fn run<'a>(&self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, input: TriggerInput, system_meta: SystemHandle) -> Output {
                 #[allow(clippy::too_many_arguments)]
-                fn call<'a, E: Event, $($param),+, Output>(mut f: impl FnMut(Trigger<'a, E>, $($param),+) -> Output, s: Trigger<'a, E>, $($p:$param),+) -> Output {
+                fn call<'a, E: Send + Sync + 'static, $($param),+, Output>(mut f: impl FnMut(Trigger<'a, E>, $($param),+) -> Output, s: Trigger<'a, E>, $($p:$param),+) -> Output {
                     f(s, $($p),+)
                 }
                 unsafe {
@@ -140,7 +140,7 @@ macro_rules! observer_func_impl {
 
 variadics_please::all_tuples_enumerated!{observer_func_impl, 2, 31, In, p}
 
-impl<E: Event, F, In, Output> SystemFunc<(Trigger<'_, E>, In), TriggerInput, Output> for F where 
+impl<E: Send + Sync + 'static, F, In, Output> SystemFunc<(Trigger<'_, E>, In), TriggerInput, Output> for F where 
     F: Send + Sync + 'static,
     for<'a> &'a F:
         FnMut(Trigger<'a, E>, In) -> Output +
@@ -149,7 +149,7 @@ impl<E: Event, F, In, Output> SystemFunc<(Trigger<'_, E>, In), TriggerInput, Out
 {
     type State = In::State;
     fn run<'a>(&self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, input: TriggerInput, system_meta: SystemHandle) -> Output {
-        fn call<'a, E: Event, In, Output>(mut f: impl FnMut(Trigger<'a, E>, In) -> Output, s: Trigger<'a, E>, p: In) -> Output {
+        fn call<'a, E: Send + Sync + 'static, In, Output>(mut f: impl FnMut(Trigger<'a, E>, In) -> Output, s: Trigger<'a, E>, p: In) -> Output {
             f(s, p)
         }
         unsafe {
@@ -184,13 +184,13 @@ impl<E: Event, F, In, Output> SystemFunc<(Trigger<'_, E>, In), TriggerInput, Out
     }
 }
 
-impl<E: Event, F, Output> SystemFunc<Trigger<'_, E>, TriggerInput, Output> for F where 
+impl<E: Send + Sync + 'static, F, Output> SystemFunc<Trigger<'_, E>, TriggerInput, Output> for F where 
     F: Send + Sync + 'static,
     for<'a> &'a F: FnMut(Trigger<'a, E>) -> Output
 {
     type State = ();
     fn run<'a>(&self, world_ptr: WorldPtr<'a>, _: &'a mut Self::State, input: TriggerInput, _: SystemHandle) -> Output {
-        fn call<'a, E: Event, Output>(mut f: impl FnMut(Trigger<'a, E>) -> Output, s: Trigger<'a, E>) -> Output {
+        fn call<'a, E: Send + Sync + 'static, Output>(mut f: impl FnMut(Trigger<'a, E>) -> Output, s: Trigger<'a, E>) -> Output {
             f(s)
         }
         let trigger = unsafe { Trigger::fetch(world_ptr, input) };

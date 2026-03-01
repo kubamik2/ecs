@@ -2,9 +2,7 @@ use std::marker::PhantomData;
 
 use crate::{Resource, World, param::{SystemParam, SystemParamError, get_resource_id}, system::SystemHandle, world::WorldPtr};
 
-pub trait Event = Send + Sync + 'static;
-
-pub struct EventQueue<E: Event> {
+pub struct EventQueue<E: Send + Sync + 'static> {
     old: Vec<E>,
     old_count: usize,
     new: Vec<E>,
@@ -12,15 +10,15 @@ pub struct EventQueue<E: Event> {
     count: usize,
 }
 
-impl<E: Event> Resource for EventQueue<E> {}
+impl<E: Send + Sync + 'static> Resource for EventQueue<E> {}
 
-impl<E: Event> Default for EventQueue<E> {
+impl<E: Send + Sync + 'static> Default for EventQueue<E> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<E: Event> EventQueue<E> {
+impl<E: Send + Sync + 'static> EventQueue<E> {
     pub const fn new() -> Self {
         Self {
             old: Vec::new(),
@@ -51,18 +49,18 @@ impl<E: Event> EventQueue<E> {
     }
 }
 
-pub struct EventReader<'a, E: Event> {
+pub struct EventReader<'a, E: Send + Sync + 'static> {
     last_count: &'a mut usize,
     event_queue: &'a EventQueue<E>,
 }
 
-impl<E: Event> EventReader<'_, E> {
+impl<E: Send + Sync + 'static> EventReader<'_, E> {
     pub fn read(&mut self) -> EventIterator<'_, E> {
         EventIterator::new(self.event_queue, self.last_count)
     }
 }
 
-unsafe impl<E: Event> SystemParam for EventReader<'_, E> {
+unsafe impl<E: Send + Sync + 'static> SystemParam for EventReader<'_, E> {
     type Item<'a> = EventReader<'a, E>;
     type State = usize;
     fn init_state(_: &mut crate::World, _: &SystemHandle) -> Result<Self::State, SystemParamError> {
@@ -83,12 +81,12 @@ unsafe impl<E: Event> SystemParam for EventReader<'_, E> {
     }
 }
 
-pub struct EventReadWriter<'a, E: Event> {
+pub struct EventReadWriter<'a, E: Send + Sync + 'static> {
     last_count: &'a mut usize,
     event_queue: &'a mut EventQueue<E>,
 }
 
-impl<E: Event> EventReadWriter<'_, E> {
+impl<E: Send + Sync + 'static> EventReadWriter<'_, E> {
     pub fn read(&mut self) -> EventIterator<'_, E> {
         EventIterator::new(self.event_queue, self.last_count)
     }
@@ -102,7 +100,7 @@ impl<E: Event> EventReadWriter<'_, E> {
     }
 }
 
-unsafe impl<E: Event> SystemParam for EventReadWriter<'_, E> {
+unsafe impl<E: Send + Sync + 'static> SystemParam for EventReadWriter<'_, E> {
     type Item<'a> = EventReadWriter<'a, E>;
     type State = usize;
     fn init_state(_: &mut crate::World, _: &SystemHandle) -> Result<Self::State, SystemParamError> {
@@ -123,12 +121,12 @@ unsafe impl<E: Event> SystemParam for EventReadWriter<'_, E> {
     }
 }
 
-pub struct EventIterator<'a, E: Event> {
+pub struct EventIterator<'a, E: Send + Sync + 'static> {
     iter: std::iter::Chain<std::slice::Iter<'a, E>, std::slice::Iter<'a, E>>,
     last_count: &'a mut usize,
 }
 
-impl <'a, E: Event> EventIterator<'a, E> {
+impl <'a, E: Send + Sync + 'static> EventIterator<'a, E> {
     pub fn new(event_queue: &'a EventQueue<E>, last_count: &'a mut usize) -> Self {
         *last_count = (*last_count).max(event_queue.old_count);
         let queue_old_sliced_index = (*last_count - event_queue.old_count).min(event_queue.old.len());
@@ -144,7 +142,7 @@ impl <'a, E: Event> EventIterator<'a, E> {
     }
 }
 
-impl<'a, E: Event> Iterator for EventIterator<'a, E> {
+impl<'a, E: Send + Sync + 'static> Iterator for EventIterator<'a, E> {
     type Item = &'a E;
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().inspect(|_| *self.last_count += 1)
@@ -152,12 +150,12 @@ impl<'a, E: Event> Iterator for EventIterator<'a, E> {
 }
 
 #[derive(Default)]
-pub struct EventReaderState<E: Event> {
+pub struct EventReaderState<E: Send + Sync + 'static> {
     last_count: usize,
     _m: PhantomData<E>,
 }
 
-impl<E: Event> EventReaderState<E> {
+impl<E: Send + Sync + 'static> EventReaderState<E> {
     #[inline]
     pub const fn new() -> Self {
         Self {

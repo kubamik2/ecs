@@ -1,11 +1,11 @@
-use crate::{observer::TriggerInput, world::WorldPtr, Entity, Event};
+use crate::{observer::TriggerInput, world::WorldPtr, Entity};
 
-pub struct Trigger<'a, E: Event> {
+pub struct Trigger<'a, E: Send + Sync + 'static> {
     event: &'a mut E,
     target: Option<Entity>,
 }
 
-impl<E: Event> Trigger<'_, E> {
+impl<E: Send + Sync + 'static> Trigger<'_, E> {
     pub fn event(&self) -> &E {
         self.event
     }
