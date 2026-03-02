@@ -29,7 +29,7 @@ pub fn resource_derive_macro(item: TokenStream) -> TokenStream {
 
     quote::quote! {
         impl #impl_generics Resource for #ident #ty_generics #where_clause {
-            fn join_additional_resource_access<F: FnMut(ResourceId)>(world: &mut World, mut f: F) -> Result<(), ecs::param::SystemParamError> {
+            fn join_additional_resource_access<F: FnMut(ecs::ResourceId)>(world: &mut ecs::World, mut f: F) -> Result<(), ecs::param::SystemParamError> {
                 #(f(world.get_resource_id::<#linked_resources>().ok_or(ecs::param::SystemParamError::MissingResource(std::any::type_name::<#linked_resources>()))?);)*
                 Ok(())
             }

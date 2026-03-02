@@ -1,4 +1,4 @@
-#![feature(sync_unsafe_cell, downcast_unchecked, allocator_api, trait_alias)]
+#![feature(sync_unsafe_cell, downcast_unchecked, allocator_api)]
 mod bitmap;
 mod component;
 mod entity;
