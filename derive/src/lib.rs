@@ -9,7 +9,7 @@ pub fn component_derive_macro(item: TokenStream) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     quote::quote! {
-        impl #impl_generics Component for #ident #ty_generics #where_clause {}
+        impl #impl_generics ecs::Component for #ident #ty_generics #where_clause {}
     }.into()
 }
 
@@ -28,7 +28,7 @@ pub fn resource_derive_macro(item: TokenStream) -> TokenStream {
     }
 
     quote::quote! {
-        impl #impl_generics Resource for #ident #ty_generics #where_clause {
+        impl #impl_generics ecs::Resource for #ident #ty_generics #where_clause {
             fn join_additional_resource_access<F: FnMut(ecs::ResourceId)>(world: &mut ecs::World, mut f: F) -> Result<(), ecs::param::SystemParamError> {
                 #(f(world.get_resource_id::<#linked_resources>().ok_or(ecs::param::SystemParamError::MissingResource(std::any::type_name::<#linked_resources>()))?);)*
                 Ok(())
@@ -45,6 +45,6 @@ pub fn schedule_label_derive_macro(item: TokenStream) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     quote::quote! {
-        impl #impl_generics ScheduleLabel for #ident #ty_generics #where_clause {}
+        impl #impl_generics ecs::ScheduleLabel for #ident #ty_generics #where_clause {}
     }.into()
 }
