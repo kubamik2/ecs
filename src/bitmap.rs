@@ -1,4 +1,4 @@
-use std::{fmt::{Debug, Display}, ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Deref}};
+use std::{fmt::{Debug, Display}, ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Deref}};
 
 type StorageType = u128;
 
@@ -89,6 +89,19 @@ impl BitOr for Bitmap {
 impl BitOrAssign for Bitmap {
     fn bitor_assign(&mut self, rhs: Self) {
         self.0 |= rhs.0
+    }
+}
+
+impl BitXor for Bitmap {
+    type Output = Self;
+    fn bitxor(self, rhs: Self) -> Self::Output {
+        Self(self.0 ^ rhs.0)
+    }
+}
+
+impl BitXorAssign for Bitmap {
+    fn bitxor_assign(&mut self, rhs: Self) {
+        self.0 ^= rhs.0
     }
 }
 

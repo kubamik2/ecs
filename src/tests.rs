@@ -86,3 +86,55 @@ fn link_resources() {
     system2.init(&mut world).unwrap();
     assert_eq!((*system2.resource_access().mutable() & *access2.mutable()).count_ones(), 3);
 }
+
+#[test]
+fn entities_race_condition() {
+    let entities = crate::entity::Entities::default();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let barrier = std::sync::Barrier::new(650);
+    std::thread::scope(|scope| {
+        for _ in 0..650 {
+            scope.spawn(|| {
+                barrier.wait();
+                let mut v = vec![];
+                for _ in 0..100 {
+                    let entity = entities.spawn();
+                    v.push(entity);
+                }
+                tx.send(v).unwrap();
+            }); 
+        }
+    });
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let mut all = Vec::new();
+    while let Ok(v) =  rx.try_recv() {
+        all.extend(v);
+    }
+    let orig_len = all.len();
+    all.dedup();
+    assert_eq!(all.len(), orig_len, "duplicate entities");
+}
+
+#[test]
+fn entity_reuse() {
+    let mut entities = crate::entity::Entities::default();
+    let mut spawned = Vec::new();
+    for _ in 0..=crate::entity::MAX_ENTITY_ID {
+        spawned.push(entities.spawn());
+    }
+    while let Some(i) = spawned.pop() {
+        entities.despawn(i, &mut Vec::new());
+    }
+    for _ in 0..=crate::entity::MAX_ENTITY_ID / 2 {
+        spawned.push(entities.spawn());
+    }
+    while let Some(i) = spawned.pop() {
+        entities.despawn(i, &mut Vec::new());
+    }
+    for _ in 0..=crate::entity::MAX_ENTITY_ID / 2 {
+        spawned.push(entities.spawn());
+    }
+    while let Some(i) = spawned.pop() {
+        assert_ne!(i.version(), 0);
+    }
+}

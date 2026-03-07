@@ -1,8 +1,8 @@
-use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::{Commands, storage::sparse_set::SparseSet};
 
-pub const MAX_ENTITIES: usize = u16::MAX as usize;
+pub const MAX_ENTITY_ID: usize = u16::MAX as usize;
 
 #[derive(Hash, Clone, Copy, PartialEq, Eq)]
 pub struct Entity {
@@ -13,7 +13,6 @@ pub struct Entity {
 impl Entity {
     #[inline(always)]
     const fn new(id: u16, version: u16) -> Self {
-        assert!(id as usize <= MAX_ENTITIES);
         Self { id, version }
     }
 
@@ -38,8 +37,8 @@ pub struct Entities {
     free_entity_ids: Vec<u16>,
     entity_versions: Vec<u16>,
     claimed_free_entities: AtomicUsize,
-    highest_free_entity_id: AtomicU16,
-    // TODO might want to consider a different structure than Vec for fast removal and unique insertion
+    highest_free_entity_id: AtomicUsize,
+    // TODO: might want to consider a different structure than Vec for fast removal and unique insertion
     children: SparseSet<Vec<Entity>>,
 }
 
@@ -49,7 +48,7 @@ impl Default for Entities {
             free_entity_ids: Vec::new(),
             entity_versions: Vec::new(),
             claimed_free_entities: AtomicUsize::new(0),
-            highest_free_entity_id: AtomicU16::new(0),
+            highest_free_entity_id: AtomicUsize::new(0),
             children: SparseSet::default(),
         }
     }
@@ -65,7 +64,7 @@ impl Entities {
         if entity.id() as usize >= self.entity_versions.len() {
             self.entity_versions.resize(entity.id() as usize + 1, 0);
         }
-        self.entity_versions[entity.id() as usize] += 1;
+        self.entity_versions[entity.id() as usize] = self.entity_versions[entity.id() as usize].wrapping_add(1);
 
         if let Some(children) = self.children.remove(entity.id() as usize) {
             let mut commands = Commands::new(command_buffer, self);
@@ -78,7 +77,8 @@ impl Entities {
     pub fn spawn(&self) -> Entity {
         if self.free_entity_ids.is_empty() {
             let highest_free_entity_id = self.highest_free_entity_id.fetch_add(1, Ordering::Relaxed);
-            Entity::new(highest_free_entity_id, 0)
+            assert!(highest_free_entity_id <= MAX_ENTITY_ID, "entity overflow");
+            Entity::new(highest_free_entity_id as u16, 0)
         } else {
             let free_entity_index = (self.free_entity_ids.len() - 1).checked_sub(self.claimed_free_entities.fetch_add(1, Ordering::Relaxed));
             if let Some(free_entity_index) = free_entity_index {
@@ -87,7 +87,8 @@ impl Entities {
                 Entity::new(entity_id, version)
             } else {
                 let highest_free_entity_id = self.highest_free_entity_id.fetch_add(1, Ordering::Relaxed);
-                Entity::new(highest_free_entity_id, 0)
+                assert!(highest_free_entity_id <= MAX_ENTITY_ID, "entity overflow");
+                Entity::new(highest_free_entity_id as u16, 0)
             }
         }
     }

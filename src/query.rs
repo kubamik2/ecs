@@ -12,18 +12,6 @@ pub struct Query<'a, D: QueryData, F: QueryFilter = ()> {
     cached_component_ids: [ComponentId; QUERY_MAX_VARIADIC_COUNT],
 }
 
-impl<D: QueryData, F: QueryFilter> Clone for Query<'_, D, F> {
-    fn clone(&self) -> Self {
-        Self {
-            _a: PhantomData,
-            world_ptr: self.world_ptr,
-            required_component_signature: self.required_component_signature,
-            forbidden_component_signature: self.forbidden_component_signature,
-            cached_component_ids: self.cached_component_ids,
-        }
-    }
-}
-
 impl<'a, D: QueryData, F: QueryFilter> Query<'a, D, F> {
     pub fn new(world: &'a mut World) -> Self {
         D::register_components(world);
