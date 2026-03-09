@@ -1,8 +1,6 @@
 use std::{any::{TypeId, type_name}, fmt::Display};
 
-use crate::{Commands, Resource, ResourceId, system::SystemHandle, world::WorldPtr};
-
-use super::{access::Access, World};
+use crate::{Commands, Resource, ResourceId, World, access::{AccessBuilder, Conflict}, system::SystemHandle, world::WorldPtr};
 
 /// # Safety
 /// If a param uses an external resource or component it must declared in join_resource_access and
@@ -11,8 +9,7 @@ use super::{access::Access, World};
 pub unsafe trait SystemParam {
     type Item<'a>;
     type State: Send + Sync;
-    fn join_component_access(world: &mut World, component_access: &mut Access) -> Result<(), SystemParamError> { Ok(()) }
-    fn join_resource_access(world: &mut World, resource_access: &mut Access) -> Result<(), SystemParamError> { Ok(()) }
+    fn join_access(world: &mut World, access: &mut AccessBuilder) -> Result<(), SystemParamError> { Ok(()) }
     fn join_trigger_access(trigger_access: &mut Option<TypeId>) {}
     fn init_state(world: &mut World, system_meta: &SystemHandle) -> Result<Self::State, SystemParamError>;
     /// This function will run in parallel
@@ -26,7 +23,8 @@ pub unsafe trait SystemParam {
 #[derive(Clone, Copy, Debug)]
 pub enum SystemParamError {
     MissingResource(&'static str),
-    MissingComponent(&'static str)
+    MissingComponent(&'static str),
+    Conflict(Conflict),
 }
 
 impl Display for SystemParamError {
@@ -34,6 +32,7 @@ impl Display for SystemParamError {
         match self {
             Self::MissingComponent(name) => f.write_fmt(format_args!("missing component '{}'", name)),
             Self::MissingResource(name) => f.write_fmt(format_args!("missing resource '{}'", name)),
+            Self::Conflict(conflict) => std::fmt::Display::fmt(conflict, f),
         }
     }
 }

@@ -1,6 +1,6 @@
 use std::any::TypeId;
 
-use crate::{Commands, SystemHandle, World, access::Access, param::{SystemParam, SystemParamError}, system::SystemFunc, world::WorldPtr};
+use crate::{Commands, SystemHandle, World, param::{SystemParam, SystemParamError}, system::SystemFunc, world::WorldPtr};
 
 pub type ECSError = anyhow::Error;
 
@@ -33,12 +33,8 @@ impl<F, In> SystemFunc<(ECSError, In), ECSError, ()> for F where
         }
     }
 
-    fn join_component_access(world: &mut World, component_access: &mut Access) -> Result<(), SystemParamError> {
-        In::join_component_access(world, component_access)
-    }
-
-    fn join_resource_access(world: &mut World, resource_access: &mut Access) -> Result<(), SystemParamError> {
-        In::join_resource_access(world, resource_access)
+    fn join_access(world: &mut World, access: &mut crate::access::AccessBuilder) -> Result<(), SystemParamError> {
+        In::join_access(world, access)
     }
 
     fn name(&self) -> &'static str {
@@ -70,9 +66,7 @@ impl<F, Output> SystemFunc<ECSError, ECSError, Output> for F where
         call(self, input)
     }
 
-    fn join_component_access(_: &mut World, _: &mut Access) -> Result<(), SystemParamError> { Ok(()) }
-
-    fn join_resource_access(_: &mut World, _: &mut Access) -> Result<(), SystemParamError> { Ok(()) }
+    fn join_access(_: &mut World, _: &mut crate::access::AccessBuilder) -> Result<(), SystemParamError> { Ok(()) }
 
     fn name(&self) -> &'static str {
         std::any::type_name::<F>()
@@ -109,13 +103,8 @@ macro_rules! error_handler_func_impl {
                 }
             }
             
-            fn join_component_access(world: &mut World, component_access: &mut Access) -> Result<(), SystemParamError> {
-                $($param::join_component_access(world, component_access)?;)+
-                Ok(())
-            }
-
-            fn join_resource_access(world: &mut World, resource_access: &mut Access) -> Result<(), SystemParamError> {
-                $($param::join_resource_access(world, resource_access)?;)+
+            fn join_access(world: &mut World, access: &mut crate::access::AccessBuilder) -> Result<(), SystemParamError> {
+                $($param::join_access(world, access)?;)+
                 Ok(())
             }
 

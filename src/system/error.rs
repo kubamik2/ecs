@@ -1,6 +1,6 @@
 use std::{error::Error, fmt::{Debug, Display}};
 
-use crate::{SystemId, access::AccessError, param::SystemParamError};
+use crate::{SystemId, param::SystemParamError};
 
 #[derive(Clone)]
 pub struct InternalSystemError {
@@ -34,27 +34,17 @@ impl InternalSystemError {
             kind: InternalSystemErrorKind::Param(err)
         }
     }
-
-    pub fn access(system_name: &'static str, system_id: SystemId, err: AccessError) -> Self {
-        Self {
-            system_name,
-            system_id,
-            kind: InternalSystemErrorKind::Access(err)
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum InternalSystemErrorKind {
     Param(SystemParamError),
-    Access(AccessError),
 }
 
 impl Display for InternalSystemErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Param(param) => std::fmt::Display::fmt(param, f),
-            Self::Access(access) => std::fmt::Display::fmt(access, f),
         }
     }
 }

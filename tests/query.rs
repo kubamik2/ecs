@@ -1,18 +1,19 @@
 mod common;
 use ecs::*;
 
+#[derive(Component)]
+struct A;
+#[derive(Component)]
+struct B;
+#[derive(Component)]
+struct C;
+#[derive(Component)]
+struct D;
+#[derive(Component)]
+struct E;
+
 #[test]
 fn filter() {
-    #[derive(Component)]
-    struct A;
-    #[derive(Component)]
-    struct B;
-    #[derive(Component)]
-    struct C;
-    #[derive(Component)]
-    struct D;
-    #[derive(Component)]
-    struct E;
     let mut world = World::default();
     let a = world.spawn((A, B, C, D));
     let b = world.spawn(A);
@@ -33,11 +34,23 @@ fn filter() {
     assert!(world.query_filtered::<(), With<(A, E)>>().iter().count() == 0);
 
     assert!(world.query_filtered::<&A, With<A>>().get(a).is_some());
-    assert!(world.query_filtered::<&A, Without<A>>().iter().count() == 0);
     assert!(world.query_filtered::<&A, Without<B>>().iter().count() == 1);
     assert!(world.query_filtered::<&A, Without<B>>().get(b).is_some());
-    assert!(world.query_filtered::<(&A, &B, &C, &D), Without<A>>().iter().count() == 0);
 }
+
+#[test]
+#[should_panic]
+fn filter_empty_set_panic_simple() {
+    let mut world = World::default();
+    world.query_filtered::<&A, Without<A>>();
+} 
+
+#[test]
+#[should_panic]
+fn filter_empty_set_panic_complex() {
+    let mut world = World::default();
+    world.query_filtered::<(&A, &mut B, &C, &mut D), (Without<(C, D)>, With<A>)>();
+} 
 
 #[test]
 fn disallow_race_condition() {

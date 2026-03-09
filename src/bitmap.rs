@@ -1,4 +1,4 @@
-use std::{fmt::{Debug, Display}, ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Deref}};
+use std::{fmt::{Debug, Display}, ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Deref, Not}};
 
 type StorageType = u128;
 
@@ -18,8 +18,7 @@ impl Bitmap {
         assert!(index < Self::WIDTH);
         Self(self.0 | (1 << index))
     }
-
-    #[inline]
+#[inline]
     pub const fn get(&self, index: usize) -> bool {
         assert!(index < Self::WIDTH);
         let mask: StorageType = 1 << index;
@@ -102,6 +101,13 @@ impl BitXor for Bitmap {
 impl BitXorAssign for Bitmap {
     fn bitxor_assign(&mut self, rhs: Self) {
         self.0 ^= rhs.0
+    }
+}
+
+impl Not for Bitmap {
+    type Output = Self;
+    fn not(self) -> Self::Output {
+        Self(!self.0)
     }
 }
 

@@ -1,14 +1,14 @@
 use std::{any::{Any, TypeId}, cell::SyncUnsafeCell, collections::HashMap, marker::PhantomData, ops::{Deref, DerefMut}};
 
-use crate::{Commands, param::{SystemParamError, get_resource_id}, storage::sparse_set::SparseSet, system::SystemHandle, world::WorldPtr};
+use crate::{Commands, access::{AccessBuilder, Conflict}, param::{SystemParamError, get_resource_id}, storage::sparse_set::SparseSet, system::SystemHandle, world::WorldPtr};
 
-use super::{access::Access, param::SystemParam, World};
+use super::{param::SystemParam, World};
 
 #[allow(unused)]
 pub trait Resource: Send + Sync + 'static {
     fn on_add(&mut self, commands: &mut Commands) {}
     fn on_remove(&mut self, commands: &mut Commands) {}
-    fn join_additional_resource_access<F: FnMut(ResourceId)>(world: &mut World, mut f: F) -> Result<(), SystemParamError> { Ok(()) }
+    fn join_additional_resource_access<F: FnMut(ResourceId) -> Result<(), Conflict>>(world: &mut World, mut f: F) -> Result<(), SystemParamError> { Ok(()) }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -181,10 +181,10 @@ unsafe impl<R: Resource + Send + Sync + 'static> SystemParam for Res<'_, R> {
     type Item<'b> = Res<'b, R>;
     type State = ResourceId;
 
-    fn join_resource_access(world: &mut World, resource_access: &mut Access) -> Result<(), SystemParamError> {
-        resource_access.add_immutable(get_resource_id::<R>(world)?.get());
+    fn join_access(world: &mut World, access: &mut AccessBuilder) -> Result<(), SystemParamError> {
+        access.add_resource_immutable(get_resource_id::<R>(world)?.get()).map_err(SystemParamError::Conflict)?;
         R::join_additional_resource_access(world, |resource_id| {
-            resource_access.add_immutable(resource_id.get());
+            access.add_resource_immutable(resource_id.get())
         })?;
         Ok(())
     }
@@ -204,10 +204,10 @@ unsafe impl<R: Resource + Send + Sync + 'static> SystemParam for ResMut<'_, R> {
     type State = (ResourceId, bool);
     //                          ^ was_modified
 
-    fn join_resource_access(world: &mut World, resource_access: &mut Access) -> Result<(), SystemParamError> {
-        resource_access.add_mutable(get_resource_id::<R>(world)?.get());
+    fn join_access(world: &mut World, access: &mut AccessBuilder) -> Result<(), SystemParamError> {
+        access.add_resource_mutable(get_resource_id::<R>(world)?.get()).map_err(SystemParamError::Conflict)?;
         R::join_additional_resource_access(world, |resource_id| {
-            resource_access.add_mutable(resource_id.get());
+            access.add_resource_mutable(resource_id.get())
         })?;
         Ok(())
     }
@@ -234,10 +234,10 @@ unsafe impl<R: Resource + Send + Sync + 'static> SystemParam for Option<Res<'_, 
     type Item<'b> = Option<Res<'b, R>>;
     type State = ResourceId;
 
-    fn join_resource_access(world: &mut World, resource_access: &mut Access) -> Result<(), SystemParamError> {
-        resource_access.add_immutable(get_resource_id::<R>(world)?.get());
+    fn join_access(world: &mut World, access: &mut AccessBuilder) -> Result<(), SystemParamError> {
+        access.add_resource_immutable(get_resource_id::<R>(world)?.get()).map_err(SystemParamError::Conflict)?;
         R::join_additional_resource_access(world, |resource_id| {
-            resource_access.add_immutable(resource_id.get());
+            access.add_resource_immutable(resource_id.get())
         })?;
         Ok(())
     }
@@ -257,10 +257,10 @@ unsafe impl<R: Resource + Send + Sync + 'static> SystemParam for Option<ResMut<'
     type State = (ResourceId, bool);
     //                          ^ was_modified
 
-    fn join_resource_access(world: &mut World, resource_access: &mut Access) -> Result<(), SystemParamError> {
-        resource_access.add_mutable(get_resource_id::<R>(world)?.get());
+    fn join_access(world: &mut World, access: &mut AccessBuilder) -> Result<(), SystemParamError> {
+        access.add_resource_mutable(get_resource_id::<R>(world)?.get()).map_err(SystemParamError::Conflict)?;
         R::join_additional_resource_access(world, |resource_id| {
-            resource_access.add_mutable(resource_id.get());
+            access.add_resource_mutable(resource_id.get())
         })?;
         Ok(())
     }

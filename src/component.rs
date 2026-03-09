@@ -12,7 +12,7 @@ pub type Signature = Bitmap;
 
 pub const MAX_COMPONENTS: usize = Bitmap::WIDTH;
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct ComponentId(usize);
 
 impl ComponentId {

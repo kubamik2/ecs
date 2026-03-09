@@ -5,7 +5,7 @@ mod entity;
 pub mod system;
 mod query;
 pub mod param;
-mod access;
+pub mod access;
 mod resource;
 pub mod schedule;
 mod trigger;

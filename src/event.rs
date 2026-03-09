@@ -75,9 +75,8 @@ unsafe impl<E: Send + Sync + 'static> SystemParam for EventReader<'_, E> {
         }
     }
 
-    fn join_resource_access(world: &mut World, resource_access: &mut crate::access::Access) -> Result<(), SystemParamError> {
-        resource_access.add_immutable(get_resource_id::<EventQueue<E>>(world)?.get());
-        Ok(())
+    fn join_access(world: &mut World, access: &mut crate::access::AccessBuilder) -> Result<(), SystemParamError> {
+        access.add_resource_immutable(get_resource_id::<EventQueue<E>>(world)?.get()).map_err(SystemParamError::Conflict)
     }
 }
 
@@ -115,9 +114,8 @@ unsafe impl<E: Send + Sync + 'static> SystemParam for EventReadWriter<'_, E> {
         }
     }
 
-    fn join_resource_access(world: &mut World, resource_access: &mut crate::access::Access) -> Result<(), SystemParamError> {
-        resource_access.add_mutable(get_resource_id::<EventQueue<E>>(world)?.get());
-        Ok(())
+    fn join_access(world: &mut World, access: &mut crate::access::AccessBuilder) -> Result<(), SystemParamError> {
+        access.add_resource_mutable(get_resource_id::<EventQueue<E>>(world)?.get()).map_err(SystemParamError::Conflict)
     }
 }
 

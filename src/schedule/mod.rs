@@ -140,12 +140,10 @@ impl Schedule {
         bucket.systems.swap_remove(position);
 
         // recreate the bucket
-        bucket.joined_component_access.clear();
-        bucket.joined_resource_access.clear();
+        bucket.joined_access.clear();
         for mut system_ptr in bucket.systems.iter().copied() {
             let system = unsafe { system_ptr.as_mut() };
-            bucket.joined_component_access.join(system.component_access());
-            bucket.joined_resource_access.join(system.resource_access());
+            bucket.joined_access.join(system.access());
         }
 
         // remove the system
@@ -165,21 +163,18 @@ impl Schedule {
 
 #[derive(Default)]
 struct ParallelBucket {
-    joined_component_access: Access,
-    joined_resource_access: Access,
+    joined_access: Access,
     systems: Vec<NonNull<dyn System<Input = ()> + Send + Sync>>,
     should_run_paralell: bool,
 }
 
 impl ParallelBucket {
     fn is_system_compatible(&self, system: &dyn System<Input = ()>) -> bool {
-        self.joined_component_access.is_compatible(system.component_access()) &&
-        self.joined_resource_access.is_compatible(system.resource_access())
+        self.joined_access.is_compatible(system.access())
     }
 
     fn add_system(&mut self, system: NonNull<dyn System<Input = ()> + Send + Sync>) {
-        self.joined_component_access.join(unsafe { system.as_ref().component_access() });
-        self.joined_resource_access.join(unsafe { system.as_ref().resource_access() });
+        self.joined_access.join(unsafe { system.as_ref().access() });
         self.systems.push(system);
         self.should_run_paralell = self.systems.len() >= PARALLEL_EXECUTION_THRESHOLD;
     }

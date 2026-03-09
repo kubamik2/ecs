@@ -2,7 +2,7 @@ mod commands;
 pub mod error;
 pub use commands::Commands;
 use std::{any::TypeId, error::Error, marker::PhantomData, ops::{Deref, DerefMut}, sync::{Arc, atomic::{AtomicBool, Ordering}}};
-use crate::{access::AccessError, error::ECSError, param::{SystemParam, SystemParamError}, system::error::InternalSystemError, world::WorldPtr};
+use crate::{access::AccessBuilder, error::ECSError, param::{SystemParam, SystemParamError}, system::error::InternalSystemError, world::WorldPtr};
 
 use super::{access::Access, World};
 
@@ -39,8 +39,7 @@ pub trait System {
     fn id(&self) -> &SystemId;
     fn name(&self) -> &'static str;
     fn execute(&mut self, world_ptr: WorldPtr<'_>, input: Self::Input);
-    fn component_access(&self) -> &Access;
-    fn resource_access(&self) -> &Access;
+    fn access(&self) -> &Access;
     fn trigger_access(&self) -> Option<&TypeId>;
     fn init(&mut self, world: &mut World) -> Result<(), InternalSystemError>;
     fn is_init(&self) -> bool;
@@ -51,21 +50,12 @@ pub struct FunctionSystem<ParamIn, Input, Output, F: SystemFunc<ParamIn, Input, 
     id: SystemId,
     name: &'static str,
     state: Option<F::State>,
-    component_access: Option<Access>,
-    resource_access: Option<Access>,
+    access: Option<Access>,
     trigger_access: Option<TypeId>,
     is_init: bool,
     func: F,
     last_error: Option<ECSError>,
     _a: std::marker::PhantomData<ParamIn>,
-}
-
-impl<Input, ParamIn, Output, F: SystemFunc<ParamIn, Input, Output>> FunctionSystem<ParamIn, Input, Output, F> {
-    fn validate(&self) -> Result<(), AccessError> {
-        self.component_access.as_ref().unwrap_or_else(|| panic!("system '{}' has not been initialized", self.name)).validate()?;
-        self.resource_access.as_ref().unwrap_or_else(|| panic!("system '{}' has not been initialized", self.name)).validate()?;
-        Ok(())
-    }
 }
 
 impl<Input, ParamIn, F: SystemFunc<ParamIn, Input, ()>> System for FunctionSystem<ParamIn, Input, (), F> {
@@ -83,15 +73,9 @@ impl<Input, ParamIn, F: SystemFunc<ParamIn, Input, ()>> System for FunctionSyste
     }
 
     #[inline]
-    fn component_access(&self) -> &Access {
+    fn access(&self) -> &Access {
         let name = self.name;
-        self.component_access.as_ref().unwrap_or_else(|| panic!("system '{}' has not been initialized", name))
-    }
-
-    #[inline]
-    fn resource_access(&self) -> &Access {
-        let name = self.name;
-        self.resource_access.as_ref().unwrap_or_else(|| panic!("system '{}' has not been initialized", name))
+        self.access.as_ref().unwrap_or_else(|| panic!("system '{}' has not been initialized", name))
     }
 
     #[inline]
@@ -111,13 +95,9 @@ impl<Input, ParamIn, F: SystemFunc<ParamIn, Input, ()>> System for FunctionSyste
             id: &self.id,
             _m: PhantomData,
         };
-        let mut component_access = Access::default();
-        let mut resource_access = Access::default();
-        F::join_component_access(world, &mut component_access).map_err(|err| InternalSystemError::param(self.name, self.id.clone(), err))?;
-        F::join_resource_access(world, &mut resource_access).map_err(|err| InternalSystemError::param(self.name, self.id.clone(), err))?;
-        self.component_access = Some(component_access);
-        self.resource_access = Some(resource_access);
-        self.validate().map_err(|err| InternalSystemError::access(self.name, self.id.clone(), err))?;
+        let mut access_builder = AccessBuilder::default();
+        F::join_access(world, &mut access_builder).map_err(|err| InternalSystemError::param(self.name, self.id.clone(), err))?;
+        self.access = Some(access_builder.build());
         self.state = Some(F::init_state(world, system_handle).map_err(|err| InternalSystemError::param(self.name, self.id.clone(), err))?);
         self.is_init = true;
         Ok(())
@@ -155,15 +135,9 @@ impl<Input, ParamIn, E: Error + Send + Sync + 'static, F: SystemFunc<ParamIn, In
     }
 
     #[inline]
-    fn component_access(&self) -> &Access {
+    fn access(&self) -> &Access {
         let name = self.name;
-        self.component_access.as_ref().unwrap_or_else(|| panic!("system '{}' has not been initialized", name))
-    }
-
-    #[inline]
-    fn resource_access(&self) -> &Access {
-        let name = self.name;
-        self.resource_access.as_ref().unwrap_or_else(|| panic!("system '{}' has not been initialized", name))
+        self.access.as_ref().unwrap_or_else(|| panic!("system '{}' has not been initialized", name))
     }
 
     #[inline]
@@ -183,13 +157,9 @@ impl<Input, ParamIn, E: Error + Send + Sync + 'static, F: SystemFunc<ParamIn, In
             id: &self.id,
             _m: PhantomData,
         };
-        let mut component_access = Access::default();
-        let mut resource_access = Access::default();
-        F::join_component_access(world, &mut component_access).map_err(|err| InternalSystemError::param(self.name, self.id.clone(), err))?;
-        F::join_resource_access(world, &mut resource_access).map_err(|err| InternalSystemError::param(self.name, self.id.clone(), err))?;
-        self.component_access = Some(component_access);
-        self.resource_access = Some(resource_access);
-        self.validate().map_err(|err| InternalSystemError::access(self.name, self.id.clone(), err))?;
+        let mut access_builder = AccessBuilder::default();
+        F::join_access(world, &mut access_builder).map_err(|err| InternalSystemError::param(self.name, self.id.clone(), err))?;
+        self.access = Some(access_builder.build());
         self.state = Some(F::init_state(world, system_handle).map_err(|err| InternalSystemError::param(self.name, self.id.clone(), err))?);
         self.is_init = true;
         Ok(())
@@ -218,8 +188,7 @@ impl<Input, ParamIn, E: Error + Send + Sync + 'static, F: SystemFunc<ParamIn, In
 pub trait SystemFunc<ParamIn, Input, Output> {
     type State: Send + Sync; fn name(&self) -> &'static str;
     fn run<'a>(&'a self, world_ptr: WorldPtr<'a>, state: &'a mut Self::State, input: Input, system_meta: SystemHandle<'a>) -> Output;
-    fn join_component_access(world: &mut World, component_access: &mut Access) -> Result<(), SystemParamError>;
-    fn join_resource_access(world: &mut World, resource_access: &mut Access) -> Result<(), SystemParamError>;
+    fn join_access(world: &mut World, access: &mut AccessBuilder) -> Result<(), SystemParamError>;
     fn trigger_access() -> Option<TypeId>;
     fn init_state(world: &mut World, system_handle: SystemHandle) -> Result<Self::State, SystemParamError>;
     fn after<'state>(commands: &mut Commands<'state>, state: &'state mut Self::State);
@@ -239,10 +208,7 @@ impl<F, Output> SystemFunc<(), (), Output> for F where
     }
 
     #[inline]
-    fn join_resource_access(_: &mut World, _: &mut Access) -> Result<(), SystemParamError> { Ok(()) }
-
-    #[inline]
-    fn join_component_access(_: &mut World, _: &mut Access) -> Result<(), SystemParamError> { Ok(()) }
+    fn join_access(_: &mut World, _: &mut AccessBuilder) -> Result<(), SystemParamError> { Ok(()) }
 
     #[inline]
     fn trigger_access() -> Option<TypeId> {
@@ -278,14 +244,8 @@ impl<F, ParamIn, Output> SystemFunc<ParamIn, (), Output> for F where
         call(self, p)
     }
 
-    #[inline]
-    fn join_component_access(world: &mut World, component_access: &mut Access) -> Result<(), SystemParamError> {
-        ParamIn::join_component_access(world, component_access)
-    }
-
-    #[inline]
-    fn join_resource_access(world: &mut World, resource_access: &mut Access) -> Result<(), SystemParamError> {
-        ParamIn::join_resource_access(world, resource_access)
+    fn join_access(world: &mut World, access: &mut AccessBuilder) -> Result<(), SystemParamError> {
+        ParamIn::join_access(world, access)
     }
 
     #[inline]
@@ -331,13 +291,8 @@ macro_rules! system_func_impl {
                 }
             }
             
-            fn join_component_access(world: &mut World, component_access: &mut Access) -> Result<(), SystemParamError> {
-                $($param::join_component_access(world, component_access)?;)+
-                Ok(())
-            }
-
-            fn join_resource_access(world: &mut World, resource_access: &mut Access) -> Result<(), SystemParamError> {
-                $($param::join_resource_access(world, resource_access)?;)+
+            fn join_access(world: &mut World, access: &mut AccessBuilder) -> Result<(), SystemParamError> {
+                $($param::join_access(world, access)?;)+
                 Ok(())
             }
 
@@ -380,8 +335,7 @@ where
             id: SystemId::new(),
             name: self.name(),
             state: None,
-            component_access: None,
-            resource_access: None,
+            access: None,
             trigger_access: F::trigger_access(),
             is_init: false,
             func: self,
@@ -395,8 +349,7 @@ where
             id,
             name: self.name(),
             state: None,
-            component_access: None,
-            resource_access: None,
+            access: None,
             trigger_access: F::trigger_access(),
             is_init: false,
             func: self,
@@ -418,8 +371,7 @@ where
             id: SystemId::new(),
             name: self.name(),
             state: None,
-            component_access: None,
-            resource_access: None,
+            access: None,
             trigger_access: F::trigger_access(),
             is_init: false,
             func: self,
@@ -433,8 +385,7 @@ where
             id,
             name: self.name(),
             state: None,
-            component_access: None,
-            resource_access: None,
+            access: None,
             trigger_access: F::trigger_access(),
             is_init: false,
             func: self,

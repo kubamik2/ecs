@@ -1,4 +1,4 @@
-use crate::{Entity, IntoSystem, SystemId, World, access::Access, param::{SystemParam, SystemParamError}, system::{Commands, System, SystemFunc, SystemHandle, SystemOutput, error::InternalSystemError}, trigger::Trigger, world::WorldPtr};
+use crate::{Entity, IntoSystem, SystemId, World, access::AccessBuilder, param::{SystemParam, SystemParamError}, system::{Commands, System, SystemFunc, SystemHandle, SystemOutput, error::InternalSystemError}, trigger::Trigger, world::WorldPtr};
 use std::{any::TypeId, collections::HashMap, ptr::NonNull};
 
 #[derive(Default)]
@@ -108,14 +108,9 @@ macro_rules! observer_func_impl {
                     call(self, trigger, $($p),+)
                 }
             }
-            
-            fn join_component_access(world: &mut World, component_access: &mut Access) -> Result<(), SystemParamError> {
-                $($param::join_component_access(world, component_access)?;)+
-                Ok(())
-            }
 
-            fn join_resource_access(world: &mut World, resource_access: &mut Access) -> Result<(), SystemParamError> {
-                $($param::join_resource_access(world, resource_access)?;)+
+            fn join_access(world: &mut World, access: &mut AccessBuilder) -> Result<(), SystemParamError> {
+                $($param::join_access(world, access)?;)+
                 Ok(())
             }
 
@@ -159,12 +154,8 @@ impl<E: Send + Sync + 'static, F, In, Output> SystemFunc<(Trigger<'_, E>, In), T
         }
     }
 
-    fn join_component_access(world: &mut World, component_access: &mut Access) -> Result<(), SystemParamError> {
-        In::join_component_access(world, component_access)
-    }
-
-    fn join_resource_access(world: &mut World, resource_access: &mut Access) -> Result<(), SystemParamError> {
-        In::join_resource_access(world, resource_access)
+    fn join_access(world: &mut World, access: &mut AccessBuilder) -> Result<(), SystemParamError> {
+        In::join_access(world, access)
     }
 
     fn name(&self) -> &'static str {
@@ -197,9 +188,7 @@ impl<E: Send + Sync + 'static, F, Output> SystemFunc<Trigger<'_, E>, TriggerInpu
         call(self, trigger)
     }
 
-    fn join_component_access(_: &mut World, _: &mut Access) -> Result<(), SystemParamError> { Ok(()) }
-
-    fn join_resource_access(_: &mut World, _: &mut Access) -> Result<(), SystemParamError> { Ok(()) }
+    fn join_access(_: &mut World, _: &mut AccessBuilder) -> Result<(), SystemParamError> { Ok(()) }
 
     fn name(&self) -> &'static str {
         std::any::type_name::<F>()

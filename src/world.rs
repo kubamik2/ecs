@@ -1,6 +1,6 @@
 use std::{any::TypeId, marker::PhantomData, ops::{Deref, DerefMut}, ptr::{self, NonNull}};
 
-use crate::{error::{ECSError, ErrorHandlerInput}, observer::{ObserverInput, Observers, TriggerInput}, query::QueryData, resource::{Changed, ResourceId}, schedule::Schedules, system::{IntoSystem, System, SystemId, error::InternalSystemError}, *};
+use crate::{access::Conflict, error::{ECSError, ErrorHandlerInput}, observer::{ObserverInput, Observers, TriggerInput}, query::QueryData, resource::{Changed, ResourceId}, schedule::Schedules, system::{IntoSystem, System, SystemId, error::InternalSystemError}, *};
 
 static WORLD_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -479,7 +479,10 @@ impl World {
     #[inline]
     pub fn set_error_handler<ParamIn: ErrorHandlerInput, Output: SystemOutput, S: IntoSystem<ParamIn, ECSError, Output> + 'static>(&mut self, error_handler: S) {
         let mut boxed_system = Box::new(error_handler.into_system());
-        boxed_system.init(self).unwrap();
+        if let Err(err) = boxed_system.init(self) {
+            self.handle_error(ECSError::from(err));
+            return;
+        }
         self.error_handler = boxed_system;
     }
 
@@ -495,12 +498,12 @@ impl World {
 
     #[inline]
     pub fn query<D: QueryData>(&mut self) -> Query<'_, D, ()> {
-        Query::new(self)
+        Query::new(self).expect("incorrect query parameters")
     }
 
     #[inline]
     pub fn query_filtered<D: QueryData, F: QueryFilter>(&mut self) -> Query<'_, D, F> {
-        Query::new(self)
+        Query::new(self).expect("incorrect query parameters")
     }
 
     #[inline]
